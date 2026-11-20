@@ -4,6 +4,22 @@ All notable changes to Snap Judgment are recorded here. Versions are the
 tool's own; the record is the record. Every version below shipped on
 November 19, 2026 - it was that kind of day in court.
 
+## 0.10.0 - 2026-11-20
+
+- Full citizenship for the Downloads Docket. The docket now takes the
+  share cards (`--card`, `--svg`, `--png`, all headed THE DOWNLOADS
+  DOCKET, with duplicate waste as the headline stat when there is any
+  and the installer count otherwise), the verdict badge (`--badge`,
+  colored by the docket's own severity ladder), the full HTML report
+  (`--html`), a rematch against the most recent downloads hearing in
+  the court record (`--rematch`, reporting count and size deltas and
+  tier movement), `--year` scoping, a Wrapped kit in docket wording
+  (`--wrapped-kit`), per-file records (`--csv`: name, size_bytes,
+  modified, extension, and a category of installer, archive, or
+  other), and the `--since` / `--until` date filters. Only `--vs`,
+  `--vs-year`, `--plea-bargain`, `--cleanup-list`, and `--judge-file`
+  are still refused in this court, with the same plain error.
+
 ## 0.9.0 - 2026-11-19
 
 - The Downloads Docket: `--court downloads` convenes a second court

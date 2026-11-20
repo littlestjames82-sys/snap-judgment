@@ -98,20 +98,20 @@
 <header class="top">
   <div>
     <div class="form-no">Case No. 2026-SNAP &middot; Court of Screenshot Affairs</div>
-    <div class="form-no">Defendant: Your Screenshots Folder</div>
+    <div class="form-no" id="defendantLine">Defendant: Your Screenshots Folder</div>
   </div>
   <div class="stamp">In Session</div>
 </header>
 
 <h1>The court will now hear <span class="snap">your folder</span>.</h1>
-<p class="sub">This is the live demo of <a href="index.html">Snap Judgment</a>. Pick the folder where your
+<p class="sub" id="explainerLine">This is the live demo of <a href="index.html">Snap Judgment</a>. Pick the folder where your
 screenshots live and the court issues its verdict on the spot: a tier, the headline evidence, and a
 share card you can download. No install, no account, no waiting.</p>
 
-<div class="privacy"><b>HOW THE DEMO READS.</b> The demo reads file names, sizes, dates, and a few header bytes for dimensions. It never displays, uploads, or stores your pictures. Everything happens on this page, on your machine.</div>
+<div class="privacy"><b>HOW THE DEMO READS.</b> <span id="privacyShots">The demo reads file names, sizes, dates, and a few header bytes for dimensions. It never displays, uploads, or stores your pictures. Everything happens on this page, on your machine.</span><span id="privacyDl" hidden>The demo reads file names, sizes, and dates only. It never opens, displays, uploads, or stores your files. Everything happens on this page, on your machine.</span></div>
 
 <div class="judge-wrap">
-  <button id="judgeBtn" type="button">Judge my folder</button>
+  <button id="judgeBtn" type="button">Choose your screenshots folder</button>
   <br>
   <button id="sampleBtn" type="button">See a sample verdict</button>
   <p id="status" role="status"></p>
@@ -126,6 +126,11 @@ share card you can download. No install, no account, no waiting.</p>
   <div class="drop-inner">Drop the folder.<br>The court is ready.</div>
 </div>
 
+<div class="judge-bar" role="group" aria-label="Court">
+  <span class="judge-label">Court</span>
+  <button type="button" class="judge-btn court-btn active" data-court="screenshots">Screenshots</button>
+  <button type="button" class="judge-btn court-btn" data-court="downloads">Downloads</button>
+</div>
 <div class="judge-bar" role="group" aria-label="Presiding judge">
   <span class="judge-label">Presiding judge</span>
   <button type="button" class="judge-btn" data-voice="strict">Strict</button>
@@ -172,14 +177,14 @@ share card you can download. No install, no account, no waiting.</p>
     <button id="copyVerdict" type="button">Copy my verdict</button>
     <a id="postToX" class="btn" href="#" target="_blank" rel="noopener">Post to X</a>
   </div>
-  <p class="sub">Still CLI-only: the charges census, co-defendant hearings, custom judge packs, the
+  <p class="sub" id="cliOnlyLine">Still CLI-only: the charges census, co-defendant hearings, custom judge packs, the
   court record, and the wrapped kit: <code>pip install snap-judgment</code>, or judge another folder above.</p>
 </section>
 
 <section id="noEvidence" hidden>
   <h2 class="verdict">The Verdict</h2>
   <div id="verdictTier2" style="font-size:46px;font-weight:bold;color:var(--gold);margin:14px 0 4px;">No Evidence</div>
-  <p>The court found no screenshots in that folder. Make sure you picked the folder that actually holds
+  <p id="noEvidenceText">The court found no screenshots in that folder. Make sure you picked the folder that actually holds
   them: on Windows that is usually <b>Pictures &gt; Screenshots</b>; on a Mac, screenshots often land on the
   <b>Desktop</b>; on Linux, usually <b>Pictures &gt; Screenshots</b>. The folder itself, or one level of
   subfolders, is all the court searches. Pick that folder and the court will reconvene.</p>
@@ -188,7 +193,7 @@ share card you can download. No install, no account, no waiting.</p>
   </div>
 </section>
 
-<div class="notice"><b>METADATA ONLY.</b> Names, sizes, dates, and image header bytes for width and height. The demo never decodes a pixel, never runs OCR, and has nowhere to send anything even if it wanted to. What your screenshots show is your business; how many there are is the court's.</div>
+<div class="notice"><b>METADATA ONLY.</b> <span id="noticeShots">Names, sizes, dates, and image header bytes for width and height. The demo never decodes a pixel, never runs OCR, and has nowhere to send anything even if it wanted to. What your screenshots show is your business; how many there are is the court's.</span><span id="noticeDl" hidden>Names, sizes, and dates only. The demo never opens a file, never runs OCR, and has nowhere to send anything even if it wanted to. What your files contain is your business; how many there are is the court's.</span></div>
 
 <footer>
   <span>Snap Judgment is built by <a href="https://ghostdeveloperstudio.com">Ghost Developer Studio</a>. MIT licensed.</span>

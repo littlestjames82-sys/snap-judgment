@@ -235,10 +235,16 @@ Keeper DX** (an invoice or receipt in a filename), and **Time
 Capsule** (60% or more of the files are over a year old). The
 terminal report, `--json`, `--out`, `--oneline`, `--fail-above`
 (against the docket's tiers), `--judge`, `--intensity` (with
-commentary written for downloads sins), and the court record all
-work in this court; the screenshots court's cards, comparisons, plea
-bargain, cleanup order, judge packs, and date filters are refused
-with a plain error. A sample hearing is at
+commentary written for downloads sins), the share cards (`--card`,
+`--svg`, `--png`, headed THE DOWNLOADS DOCKET), `--badge` (colored by
+the docket's own ladder), the full HTML report (`--html`),
+`--rematch` against the last downloads hearing, `--year`,
+`--wrapped-kit`, `--csv` (one row per file, categorized as installer,
+archive, or other), the `--since` / `--until` date filters, and the
+court record all work in this court. Only the comparisons (`--vs`,
+`--vs-year`), the plea bargain, the cleanup order, and judge packs
+(`--judge-file`) are refused with a plain error, because they belong
+to the screenshots court's evidence. A sample hearing is at
 `examples/downloads-demo-output.txt`. `--court` can also live in the
 config file.
 

@@ -78,6 +78,8 @@ only. It never looks at what your screenshots show.</p>
 
 <div class="install"><span>$ pip install snap-judgment</span><span class="alt">from source today: pip install git+https://github.com/littlestjames82-sys/snap-judgment &middot; Python 3.9+ &middot; zero dependencies</span></div>
 
+<p class="sub">The browser demo now hosts both courts: the Court of Screenshot Affairs and the Downloads Docket.</p>
+
 <div class="cta">
   <a class="primary" href="demo.html">Try it in your browser</a>
   <a href="https://github.com/littlestjames82-sys/snap-judgment">GitHub</a>
@@ -127,12 +129,42 @@ Your five oldest screenshots are entered as Exhibit A through Exhibit E.</p>
   <div class="award"><b>Minimalist</b><span>Under 50 screenshots total. The court's rare acquittal.</span></div>
 </div>
 
+<h2>The second court: the Downloads Docket</h2>
+<p>Since v0.9.0 the court holds a second session. <code>--court downloads</code> puts your Downloads
+folder on trial instead, judged from file names, sizes, and dates only. No file is ever opened.
+Duplicate downloads are caught by their chains: <code>setup.exe</code>, <code>setup (1).exe</code>,
+<code>setup (2).exe</code> is one decision the court can prove you made three times.</p>
+<table class="tiers">
+  <tr><th>Files</th><th>Verdict</th></tr>
+  <tr><td>0</td><td>No Evidence</td></tr>
+  <tr><td>1-24</td><td>Tidy Desk</td></tr>
+  <tr><td>25-99</td><td>Mild Clutter</td></tr>
+  <tr><td>100-249</td><td>Digital Junk Drawer</td></tr>
+  <tr><td>250-499</td><td>Landfill Adjacent</td></tr>
+  <tr><td>500-999</td><td>Hoarding Situation</td></tr>
+  <tr><td>1,000+</td><td>Superfund Site</td></tr>
+</table>
+<div class="awards">
+  <div class="award"><b>Installer Archaeologist</b><span>10 or more installers kept after their work was done.</span></div>
+  <div class="award"><b>Zip Hoarder</b><span>15 or more archives on disk, still zipped.</span></div>
+  <div class="award"><b>Double Downloader</b><span>5 or more extra copies from downloading the same file again.</span></div>
+  <div class="award"><b>Ancient Relic</b><span>The oldest file is at least 3 years old, and it is still here.</span></div>
+  <div class="award"><b>Gigabyte Landfill</b><span>5 or more gigabytes of evidence.</span></div>
+  <div class="award"><b>Still Seeding</b><span>A torrent file on disk. The court does not ask what it points to.</span></div>
+  <div class="award"><b>Receipt Keeper DX</b><span>A file with invoice or receipt in the name. The tax folder sends its regards.</span></div>
+  <div class="award"><b>Time Capsule</b><span>60% or more of the folder is over a year old.</span></div>
+</div>
+<p>The docket has full citizenship: share cards, the verdict badge, rematch against your last
+downloads hearing, a wrapped kit, CSV export, and the roast intensity bar all work there.
+The browser demo hosts both courts; the toggle is at the top.</p>
+
 <h2>What is in the box</h2>
 <ul>
-  <li><b>Three presiding judges</b> (strict, fair, lenient) plus loadable <b>judge packs</b>: The Poet, The Drill Sergeant, The Grandmother. The voice changes the wording, never the math.</li>
+  <li><b>Three presiding judges</b> (strict, fair, lenient) plus loadable <b>judge packs</b>: The Poet, The Drill Sergeant, The Grandmother, and The Critic. Packs can rename the court's awards and rewrite their evidence. The voice changes the wording, never the math.</li>
+  <li><b>A roast intensity bar</b> (<code>--intensity</code>): Gentle, Kind, Honest, Spicy, or Full Roast. It drives the court's commentary on your worst habit. The verdict math never moves.</li>
   <li><b>The charges</b>: a census of where your screenshots came from. Android filenames that carry an app are credited to it; everything else is classified by form factor.</li>
   <li><b>Co-defendant mode</b> (<code>--vs</code>) tries two folders against each other; <b>year over year</b> (<code>--vs-year</code>) tries this year against the last.</li>
-  <li><b>The plea bargain</b> (<code>--plea-bargain</code>): the hypothetical verdict if you deleted your duplicate extras and everything older than two years, computed in full. The court runs the numbers; it never deletes a thing.</li>
+  <li><b>The plea bargain</b> (<code>--plea-bargain</code>): the hypothetical verdict if you deleted your duplicate extras and everything older than two years, computed in full. The court runs the numbers; it never deletes a thing. <b>The cleanup order</b> (<code>--cleanup-list</code>) writes the exact list of files the plea would remove, for when you want to swing the axe yourself.</li>
   <li><b>Rematch mode</b> (<code>--rematch</code>) tries this hearing against the last one on record for the same folders: the count delta, and whether the verdict improved, worsened, or held.</li>
   <li><b>Date filters</b> (<code>--since</code>, <code>--until</code>) narrow a hearing to a date range, inclusive, and compose with <code>--year</code>. A bare year works too.</li>
   <li><b>A wrapped kit</b> for your year in screenshots: a share card and ready-to-post drafts built from your own numbers.</li>

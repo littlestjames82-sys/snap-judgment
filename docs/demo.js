@@ -2,16 +2,22 @@
  *
  * Pure stats core (verdictForCount, isScreenshotFile, parseDimensions,
  * computeStats, computePleaBargain, pleaClosing, sentenceFor,
- * intensityBand, courtCommentary) is environment-agnostic and
- * unit-tested from Node via tools/demo_js_test.js. Browser wiring
- * lives at the bottom, guarded by typeof window checks.
+ * intensityBand, courtCommentary, and the Downloads Docket's
+ * downloadsVerdictFor, computeDownloadsStats, downloadsCommentary) is
+ * environment-agnostic and unit-tested from Node via
+ * tools/demo_js_test.js. Browser wiring lives at the bottom, guarded
+ * by typeof window checks.
  *
  * The stats core is a faithful port of the Python tool's analyze(),
  * compute_awards(), compute_plea_bargain() and judge voices: same
- * thresholds, same evidence wording.
+ * thresholds, same evidence wording. The Downloads Docket ports
+ * analyze_downloads() and its awards, sentences, and commentary the
+ * same way.
  *
- * Privacy: the demo reads file names, sizes, dates, and a few header
- * bytes for dimensions. It never displays, uploads, or stores pictures.
+ * Privacy: the screenshots court reads file names, sizes, dates, and
+ * a few header bytes for dimensions; the Downloads Docket reads names,
+ * sizes, and dates only and never opens a file. The demo never
+ * displays, uploads, or stores anything.
  */
 "use strict";
 
@@ -740,6 +746,7 @@ function courtCommentary(stats, level) {
  * the projected drop when the plea improves the tier, the standing
  * verdict when it changes nothing. */
 function verdictPostText(stats) {
+  if (stats && stats.court === "downloads") return downloadsPostText(stats);
   var text = "My screenshots folder just got judged by Snap Judgment: " +
     stats.count + " screenshots, verdict " + stats.tier + ", " +
     stats.nightShare.toFixed(1) + "% taken at night. " +
@@ -755,6 +762,452 @@ function verdictPostText(stats) {
     }
   }
   return text + " https://littlestjames82-sys.github.io/snap-judgment/demo.html";
+}
+
+/* ------------------------------------------------------------------ */
+/* The Downloads Docket (a port of the Python downloads court)         */
+/* ------------------------------------------------------------------ */
+
+/* The docket judges every file on the surface of a folder, any type,
+ * from names, sizes, and dates only: no header reads, no file is ever
+ * opened. Records are {name, size, mtime} - the same shape the
+ * screenshots core uses, minus dimensions. */
+
+var DL_INSTALLER_EXTS = [".exe", ".msi", ".dmg", ".pkg", ".deb", ".rpm", ".appimage"];
+var DL_ARCHIVE_EXTS = [".zip", ".tar", ".gz", ".tgz", ".7z", ".rar"];
+
+/* Exact thresholds from the Python DL_TIERS. */
+function downloadsVerdictFor(count) {
+  if (count <= 0) return "No Evidence";
+  if (count >= 1000) return "Superfund Site";
+  if (count >= 500) return "Hoarding Situation";
+  if (count >= 250) return "Landfill Adjacent";
+  if (count >= 100) return "Digital Junk Drawer";
+  if (count >= 25) return "Mild Clutter";
+  return "Tidy Desk";
+}
+
+/* The fair judge's downloads sentences (the Python DL_TIERS defaults). */
+var DL_FAIR_SENTENCES = {
+  "Superfund Site":
+    "Sentence: the court recommends hazmat suits and a weekend. Bring help.",
+  "Hoarding Situation":
+    "Sentence: delete nothing. We both know you won't.",
+  "Landfill Adjacent":
+    "Sentence: mandatory organization, suspended, because we both know it won't happen.",
+  "Digital Junk Drawer":
+    "Sentence: probation. The downloads folder gets a check-in once a month.",
+  "Mild Clutter":
+    "Sentence: community service. Delete one installer. Just one. Baby steps.",
+  "Tidy Desk":
+    "Sentence: case dismissed. Keep the desk exactly as it is."
+};
+
+/* The other presiding judges on the docket, ported verbatim from the
+ * Python VOICE_SENTENCES downloads entries. */
+var DL_VOICE_SENTENCES = {
+  "strict": {
+    "Superfund Site":
+      "Sentence: maximum. Every file will be reviewed, named, and justified in writing. All of them.",
+    "Hoarding Situation":
+      "Sentence: a full audit of the downloads folder, this weekend. No extensions. No excuses.",
+    "Landfill Adjacent":
+      "Sentence: the folder is seized. Nothing new enters it until the backlog is halved.",
+    "Digital Junk Drawer":
+      "Sentence: weekly inspections of the downloads folder until this court says otherwise.",
+    "Mild Clutter":
+      "Sentence: the installers are deleted today. Not tomorrow. Today.",
+    "Tidy Desk":
+      "Sentence: none. This time. The court will be watching the folder."
+  },
+  "lenient": {
+    "Superfund Site":
+      "Encouragement: every archive tells a story, and yours is an epic. There is no rush to change.",
+    "Hoarding Situation":
+      "Encouragement: you kept it all because it all mattered at the time. That is not a crime in this court.",
+    "Landfill Adjacent":
+      "Encouragement: a healthy collection. Sort one folder someday, if you ever feel like it.",
+    "Digital Junk Drawer":
+      "Encouragement: honestly, this is most people. A little tidy now and then, if the mood strikes.",
+    "Mild Clutter":
+      "Encouragement: barely a habit at all. Keep doing what you are doing.",
+    "Tidy Desk":
+      "Encouragement: case dismissed, with applause. Download something nice; you have earned the space."
+  }
+};
+
+function downloadsSentenceFor(tier, voice) {
+  var fair = DL_FAIR_SENTENCES[tier] || "";
+  var pack = DL_VOICE_SENTENCES[voice];
+  if (pack && pack[tier]) return pack[tier];
+  return fair;
+}
+
+/* The Python human_bytes: whole bytes as an integer, everything else
+ * with exactly one decimal. (The screenshots core's humanSize rounds
+ * large values the way the Python card code does; the docket's
+ * evidence lines use this one, matching the CLI report.) */
+function dlHumanBytes(n) {
+  var units = ["B", "KB", "MB", "GB", "TB"];
+  var value = n;
+  for (var i = 0; i < units.length; i++) {
+    if (value < 1024 || units[i] === "TB") {
+      if (units[i] === "B") return Math.floor(value) + " B";
+      return value.toFixed(1) + " " + units[i];
+    }
+    value /= 1024;
+  }
+  return value.toFixed(1) + " TB";
+}
+
+/* Python's Path(name).suffix: the part from the last dot, but only
+ * when the dot is neither the first nor the last character. */
+function dlExtOf(name) {
+  var i = name.lastIndexOf(".");
+  if (i > 0 && i < name.length - 1) return name.slice(i).toLowerCase();
+  return "";
+}
+
+/* Python's Path(name).stem: the name with its suffix removed. */
+function dlStemOf(name) {
+  var i = name.lastIndexOf(".");
+  if (i > 0 && i < name.length - 1) return name.slice(0, i);
+  return name;
+}
+
+/* The Python _DL_SUFFIX_RE: a trailing " (n)" or " copy"/" copy n". */
+var DL_SUFFIX_RE = /\s*\(\d+\)\s*$|\s+copy(?:\s+\d+)?\s*$/i;
+
+/* The identity of a download with its copy suffixes stripped:
+ * "setup (2).exe", "setup copy.exe" and "setup.exe" share a key.
+ * Returns {stem, ext}; the stem is trimmed and lowercased. */
+function downloadsGroupKey(name) {
+  var stem = dlStemOf(name);
+  var prev;
+  do {
+    prev = stem;
+    stem = stem.replace(DL_SUFFIX_RE, "");
+  } while (stem !== prev);
+  return { stem: stem.trim().toLowerCase(), ext: dlExtOf(name) };
+}
+
+/* Every statistic for a downloads hearing, a port of the Python
+ * analyze_downloads. records: [{name, size, mtime (ms epoch)}].
+ * nowMs is the court's clock; it defaults to Date.now(). */
+function computeDownloadsStats(records, nowMs) {
+  if (nowMs === undefined || nowMs === null) nowMs = Date.now();
+  var count = records.length;
+  var stats = {
+    court: "downloads",
+    count: count,
+    tier: downloadsVerdictFor(count),
+    totalBytes: 0,
+    totalSizeHuman: "0 B",
+    spanStart: null, spanEnd: null, spanDays: 0,
+    spanStartLabel: "", spanEndLabel: "",
+    installerCount: 0, installerBytes: 0, installerHuman: "0 B",
+    archiveCount: 0, archiveBytes: 0,
+    duplicateGroups: 0, duplicateExtra: 0, duplicateExtraBytes: 0,
+    duplicateWasteHuman: "0 B",
+    oldestName: "", oldestLabel: "", oldestAgeYears: 0,
+    largestName: "", largestSize: 0, largestHuman: "0 B",
+    extensions: [],
+    oldCount: 0, oldShare: 0,
+    torrentCount: 0, receiptCount: 0,
+    awards: []
+  };
+  if (count === 0) return stats;
+
+  /* Sorted by (mtime, name), the Python DlFile order. */
+  var sorted = records.slice().sort(function (a, b) {
+    if (a.mtime !== b.mtime) return a.mtime - b.mtime;
+    return a.name < b.name ? -1 : (a.name > b.name ? 1 : 0);
+  });
+
+  var total = 0, instCount = 0, instBytes = 0, archCount = 0, archBytes = 0;
+  var torrent = 0, receipt = 0, oldCount = 0;
+  var groups = {};   /* key -> {stem, members} */
+  var extCounts = {};
+  var largest = sorted[0];
+
+  for (var i = 0; i < sorted.length; i++) {
+    var f = sorted[i];
+    var ext = dlExtOf(f.name);
+    total += f.size;
+    if (DL_INSTALLER_EXTS.indexOf(ext) !== -1) { instCount++; instBytes += f.size; }
+    if (DL_ARCHIVE_EXTS.indexOf(ext) !== -1) { archCount++; archBytes += f.size; }
+    if (ext === ".torrent") torrent++;
+    var lowerName = f.name.toLowerCase();
+    if (lowerName.indexOf("invoice") !== -1 || lowerName.indexOf("receipt") !== -1) receipt++;
+    if (Math.floor((nowMs - f.mtime) / 86400000) > 365) oldCount++;
+
+    var gk = downloadsGroupKey(f.name);
+    var gKey = gk.stem + "|" + gk.ext;
+    if (!groups[gKey]) groups[gKey] = { stem: gk.stem, members: [] };
+    groups[gKey].members.push(f);
+
+    var extLabel = ext || "(no extension)";
+    extCounts[extLabel] = (extCounts[extLabel] || 0) + 1;
+
+    /* The Python largest is max by (size, name). */
+    if (f.size > largest.size ||
+        (f.size === largest.size && f.name > largest.name)) {
+      largest = f;
+    }
+  }
+
+  /* Duplicate downloads: in each group of two or more, the keeper is
+   * the file whose stem is the bare group stem (else the first name
+   * alphabetically); every other member is an extra copy. */
+  var dupGroups = 0, dupExtra = 0, dupExtraBytes = 0;
+  for (var k in groups) {
+    var members = groups[k].members;
+    if (members.length < 2) continue;
+    dupGroups++;
+    var keeper = null, keeperFlag = 0;
+    for (var m = 0; m < members.length; m++) {
+      var flag = dlStemOf(members[m].name).toLowerCase() === groups[k].stem ? 0 : 1;
+      if (!keeper || flag < keeperFlag ||
+          (flag === keeperFlag &&
+           members[m].name.toLowerCase() < keeper.name.toLowerCase())) {
+        keeper = members[m];
+        keeperFlag = flag;
+      }
+    }
+    for (var n = 0; n < members.length; n++) {
+      if (members[n] !== keeper) {
+        dupExtra++;
+        dupExtraBytes += members[n].size;
+      }
+    }
+  }
+
+  var oldest = sorted[0];
+  var oldestDays = Math.floor((nowMs - oldest.mtime) / 86400000);
+
+  var extList = Object.keys(extCounts).map(function (e) {
+    return { ext: e, count: extCounts[e] };
+  });
+  extList.sort(function (a, b) {
+    if (a.count !== b.count) return b.count - a.count;
+    return a.ext < b.ext ? -1 : (a.ext > b.ext ? 1 : 0);
+  });
+
+  stats.totalBytes = total;
+  stats.totalSizeHuman = dlHumanBytes(total);
+  stats.spanStart = sorted[0].mtime;
+  stats.spanEnd = sorted[count - 1].mtime;
+  stats.spanDays = dayNumOf(stats.spanEnd) - dayNumOf(stats.spanStart);
+  stats.spanStartLabel = dateLabel(stats.spanStart);
+  stats.spanEndLabel = dateLabel(stats.spanEnd);
+  stats.installerCount = instCount;
+  stats.installerBytes = instBytes;
+  stats.installerHuman = dlHumanBytes(instBytes);
+  stats.archiveCount = archCount;
+  stats.archiveBytes = archBytes;
+  stats.duplicateGroups = dupGroups;
+  stats.duplicateExtra = dupExtra;
+  stats.duplicateExtraBytes = dupExtraBytes;
+  stats.duplicateWasteHuman = dlHumanBytes(dupExtraBytes);
+  stats.oldestName = oldest.name;
+  stats.oldestLabel = dateLabel(oldest.mtime);
+  stats.oldestAgeYears = Math.max(0, Math.floor(oldestDays / 365));
+  stats.largestName = largest.name;
+  stats.largestSize = largest.size;
+  stats.largestHuman = dlHumanBytes(largest.size);
+  stats.extensions = extList.slice(0, 8);
+  stats.oldCount = oldCount;
+  stats.oldShare = round1(100 * oldCount / count);
+  stats.torrentCount = torrent;
+  stats.receiptCount = receipt;
+
+  /* The docket's awards, in the Python order, with the Python
+   * thresholds and evidence wording. */
+  var awards = [];
+  if (instCount >= 10) {
+    awards.push({ key: "installer_archaeologist", name: "Installer Archaeologist",
+      detail: instCount + " installers (" + stats.installerHuman + ") kept after their work was done. The court has excavated older civilizations with fewer setup files." });
+  }
+  if (archCount >= 15) {
+    awards.push({ key: "zip_hoarder", name: "Zip Hoarder",
+      detail: archCount + " archives on disk, still zipped. Whatever is inside them, it is staying inside them." });
+  }
+  if (dupExtra >= 5) {
+    awards.push({ key: "double_downloader", name: "Double Downloader",
+      detail: dupExtra + " extra copies of files the defendant already had, in " + dupGroups + " duplicate sets. Downloaded twice, trusted once." });
+  }
+  if (stats.oldestAgeYears >= 3) {
+    awards.push({ key: "ancient_relic", name: "Ancient Relic",
+      detail: stats.oldestName + " dates to " + stats.oldestLabel + ", over three years ago, and it is still here." });
+  }
+  if (total >= 5 * 1024 * 1024 * 1024) {
+    awards.push({ key: "gigabyte_landfill", name: "Gigabyte Landfill",
+      detail: "The downloads alone total " + stats.totalSizeHuman + ". The landfill has its own weather now." });
+  }
+  if (torrent >= 1) {
+    awards.push({ key: "still_seeding", name: "Still Seeding",
+      detail: torrent + " torrent file" + (torrent !== 1 ? "s" : "") + " on disk. The court does not ask what they point to. It never asks." });
+  }
+  if (receipt >= 1) {
+    awards.push({ key: "receipt_keeper_dx", name: "Receipt Keeper DX",
+      detail: receipt + " file" + (receipt !== 1 ? "s" : "") + " with invoice or receipt in the name. The tax folder sends its regards." });
+  }
+  if (stats.oldShare >= 60) {
+    awards.push({ key: "time_capsule", name: "Time Capsule",
+      detail: stats.oldShare.toFixed(1) + "% of these files are over a year old. This is less a folder than a stratum." });
+  }
+  stats.awards = awards;
+  return stats;
+}
+
+/* One template per band (Gentle, Kind, Honest, Spicy, Full roast) for
+ * each case the downloads court can comment on, ported verbatim from
+ * the Python DL_COMMENTARY_TEMPLATES. Tokens: {dup} duplicate extras,
+ * {installers} installer count, {age} oldest file's age in years,
+ * {size} total size, {count} total files. */
+var DL_COMMENTARY = {
+  dup: [
+    "The court found {dup} files that were downloaded more than once, and chooses to believe the defendant simply wanted to be very sure.",
+    "{dup} duplicate downloads. The defendant downloads the way nervous travelers check for their passport, repeatedly and just in case.",
+    "{dup} of these files are the same download, fetched again. The internet remembers, even when the defendant does not.",
+    "{dup} duplicate downloads. The defendant's working theory appears to be that a file does not exist until it has been downloaded twice.",
+    "{dup} duplicate downloads. The court has now reviewed the same installer multiple times, and it was not that compelling the first time."
+  ],
+  installers: [
+    "The court counts {installers} installers and sees a well-equipped machine. Every one of them set something up once.",
+    "{installers} installers kept on disk. The defendant holds onto the boxes the software came in, just in case.",
+    "{installers} installers. The software is already installed. The installers remain, as a tribute.",
+    "{installers} installers, kept long after the software moved in. The court notes the defendant could open a small museum of setup wizards.",
+    "{installers} installers. The defendant has kept every key to every door ever opened on this machine, including the doors that were demolished."
+  ],
+  old: [
+    "The oldest file here is {age} years old, and the court finds something sweet in that. Some things are simply worth keeping.",
+    "A file from {age} years ago still lives in this folder. The court respects a long memory, even a digital one.",
+    "The oldest evidence is {age} years old. The court asks, for the record, if the defendant remembers downloading it, or why.",
+    "{age} years old, the senior file in this folder has survived new machines, new updates, and several opportunities to delete it.",
+    "The court presents a file {age} years old. It has been carried from machine to machine like a family heirloom, except an heirloom is occasionally looked at."
+  ],
+  size: [
+    "The court weighs the evidence at {size} and sees a thorough collector at work. Every byte meant something once.",
+    "{size} of downloads. The court admires the commitment, even if the filing system is more of a pile.",
+    "{size}. The court notes the defendant has never once paused to think, perhaps I already have this one.",
+    "{size} of downloads. Somewhere around the halfway mark this stopped being a folder and became a storage unit.",
+    "{size}. The court would ask the defendant to produce one specific file, but nobody involved has that kind of time. That is rather the point."
+  ],
+  plain: [
+    "The court has reviewed {count} files and finds a perfectly ordinary folder. The defendant is free to go.",
+    "{count} files, and nothing the court has not seen a hundred times. A respectable, unremarkable collection.",
+    "{count} files. Not a crime scene, not a model of restraint. The court records a shrug and moves on.",
+    "{count} files, and the most notable thing about them is that there are {count} of them. The court expected either far more drama or far less folder.",
+    "{count} files. The court searched this folder for a scandal and found only volume. Even the commentary is disappointed."
+  ]
+};
+
+/* The docket's commentary: one line, flavored by the roast intensity
+ * band, aimed at the folder's most damning stat. Priority, as in
+ * Python: duplicate extras of 5 or more, then 10 or more installers,
+ * then an oldest file 3 years old or more, then 5 GB or more, then
+ * the plain count. Pure: reads stats, never writes to it. */
+function downloadsCommentary(stats, level) {
+  if (!stats || !stats.count) return NO_COMMENTARY;
+  var lvl = Math.floor(Number(level));
+  if (isNaN(lvl)) lvl = 2;
+  lvl = Math.max(0, Math.min(4, lvl));
+  var values = {
+    dup: stats.duplicateExtra || 0,
+    installers: stats.installerCount || 0,
+    age: stats.oldestAgeYears || 0,
+    size: stats.totalSizeHuman || "0 B",
+    count: Number(stats.count).toLocaleString("en-US")
+  };
+  var key = "plain";
+  if ((stats.duplicateExtra || 0) >= 5) key = "dup";
+  else if ((stats.installerCount || 0) >= 10) key = "installers";
+  else if ((stats.oldestAgeYears || 0) >= 3) key = "old";
+  else if ((stats.totalBytes || 0) >= 5 * 1024 * 1024 * 1024) key = "size";
+  return fillCommentary(DL_COMMENTARY[key][lvl], values);
+}
+
+/* The ready-to-post verdict text for a downloads hearing. */
+function downloadsPostText(stats) {
+  return "My Downloads folder just got judged by Snap Judgment: " +
+    stats.count + " files, verdict " + stats.tier + ", " +
+    stats.totalSizeHuman + " of evidence. " +
+    "It reads names, sizes, and dates only, and never opens a file. " +
+    "https://littlestjames82-sys.github.io/snap-judgment/demo.html";
+}
+
+/* webkitdirectory paths: "Folder/file" is a top-level file of the
+ * picked folder; "Folder/sub/file" is one level too deep for the
+ * docket, which judges only the surface. A bare file name (no folder
+ * path at all) is top level by definition. */
+function isTopLevelPath(relPath) {
+  if (!relPath) return true;
+  var parts = relPath.split("/").filter(function (p) { return p.length > 0; });
+  return parts.length <= 2;
+}
+
+/* A synthetic Downloads folder of 120 files, in the same {name, size,
+ * mtime} shape as a real docket scan: 17 installers, 16 archives, a
+ * setup.exe duplicate chain and a report.pdf chain (2 groups, 5 extra
+ * copies between them), and one driver from 2021. Seeded draws make
+ * the counts, the verdict (Digital Junk Drawer), and the awards
+ * identical on every run; dates anchor to nowMs so the span stays
+ * recent, except the 2021 file, which is fixed history. */
+function makeSampleDownloadsFiles(nowMs) {
+  if (nowMs === undefined || nowMs === null) nowMs = Date.now();
+  var rand = mulberry32(20261120);
+  var anchor = new Date(nowMs);
+  anchor.setDate(anchor.getDate() - 2);
+
+  function at(dayOffset, hour) {
+    var d = new Date(anchor.getTime());
+    d.setDate(d.getDate() - dayOffset);
+    d.setHours(hour || 12, Math.floor(rand() * 60), Math.floor(rand() * 60), 0);
+    return d.getTime();
+  }
+  function spread(maxDays) { return Math.floor(rand() * (maxDays + 1)); }
+
+  var files = [];
+  var i;
+  /* 12 installers, 15-30 MB each. */
+  var instExts = [".exe", ".exe", ".dmg", ".msi", ".exe", ".pkg",
+                  ".exe", ".deb", ".exe", ".msi", ".exe", ".appimage"];
+  for (i = 0; i < 12; i++) {
+    files.push({ name: "installer-" + (i + 1) + instExts[i],
+                 size: 15000000 + Math.floor(rand() * 15000000),
+                 mtime: at(spread(350), 10 + Math.floor(rand() * 10)) });
+  }
+  /* 16 archives, still zipped. */
+  for (i = 0; i < 16; i++) {
+    files.push({ name: "backup-" + (i + 1) + ".zip",
+                 size: 1000000 + Math.floor(rand() * 4000000),
+                 mtime: at(spread(350), 9 + Math.floor(rand() * 12)) });
+  }
+  /* The setup chain: one group, three extra copies. */
+  var setupNames = ["setup.exe", "setup (1).exe", "setup (2).exe", "setup (3).exe"];
+  for (i = 0; i < setupNames.length; i++) {
+    files.push({ name: setupNames[i], size: 5000000, mtime: at(20 + i * 7, 15) });
+  }
+  /* The report chain: one group, two extra copies. */
+  var reportNames = ["report.pdf", "report (1).pdf", "report copy.pdf"];
+  for (i = 0; i < reportNames.length; i++) {
+    files.push({ name: reportNames[i], size: 120000, mtime: at(40 + i * 11, 11) });
+  }
+  /* One file from 2021, still here. (Also an installer.) */
+  files.push({ name: "ancient-driver.exe", size: 3000000,
+               mtime: new Date(2021, 5, 1, 9, 0).getTime() });
+  /* 84 everyday files to round the folder out. */
+  var filler = [["document", ".pdf"], ["notes", ".txt"], ["photo", ".jpg"],
+                ["video", ".mp4"], ["slides", ".pptx"], ["budget", ".xlsx"],
+                ["song", ".mp3"], ["page", ".html"]];
+  for (i = 0; i < 84; i++) {
+    var kind = filler[Math.floor(rand() * filler.length)];
+    files.push({ name: kind[0] + "-" + (i + 1) + kind[1],
+                 size: 20000 + Math.floor(rand() * 3000000),
+                 mtime: at(spread(350), 8 + Math.floor(rand() * 14)) });
+  }
+  return files;
 }
 
 /* ------------------------------------------------------------------ */
@@ -866,7 +1319,16 @@ if (typeof module !== "undefined" && module.exports) {
     courtCommentary: courtCommentary,
     INTENSITY_BANDS: INTENSITY_BANDS,
     verdictPostText: verdictPostText,
-    makeSampleFiles: makeSampleFiles
+    makeSampleFiles: makeSampleFiles,
+    downloadsVerdictFor: downloadsVerdictFor,
+    downloadsSentenceFor: downloadsSentenceFor,
+    dlHumanBytes: dlHumanBytes,
+    downloadsGroupKey: downloadsGroupKey,
+    computeDownloadsStats: computeDownloadsStats,
+    downloadsCommentary: downloadsCommentary,
+    downloadsPostText: downloadsPostText,
+    isTopLevelPath: isTopLevelPath,
+    makeSampleDownloadsFiles: makeSampleDownloadsFiles
   };
 }
 
@@ -895,12 +1357,80 @@ function initDemo() {
   var currentVoice = "fair";
   var currentIntensity = 50;
   var currentSample = false;
+  var currentCourt = "screenshots";
 
   function setStatus(msg) { status.textContent = msg; }
 
+  /* --- the two courts -------------------------------------------------
+   * The page copy that differs per court is captured from the initial
+   * (screenshots) markup at init, so switching back restores it word
+   * for word; only the downloads variants live here as strings. */
+
+  var explainerEl = document.getElementById("explainerLine");
+  var defendantEl = document.getElementById("defendantLine");
+  var noEvidenceTextEl = document.getElementById("noEvidenceText");
+  var cliOnlyEl = document.getElementById("cliOnlyLine");
+  var shotsCopy = {
+    explainer: explainerEl ? explainerEl.innerHTML : "",
+    defendant: defendantEl ? defendantEl.textContent : "",
+    noEvidence: noEvidenceTextEl ? noEvidenceTextEl.innerHTML : "",
+    cliOnly: cliOnlyEl ? cliOnlyEl.innerHTML : ""
+  };
+  var DL_COPY = {
+    explainer: "This is the live demo of <a href=\"index.html\">Snap Judgment</a>. Pick your " +
+      "Downloads folder and the Downloads Docket, the court's second chamber, issues its " +
+      "verdict on the spot: a tier, the headline evidence, and a share card you can " +
+      "download. No install, no account, no waiting.",
+    defendant: "Defendant: Your Downloads Folder",
+    noEvidence: "The court finds nothing. No files were produced as evidence, which means " +
+      "this folder is innocent, empty, or not where your downloads actually live. Pick the " +
+      "folder your downloads really land in, usually just called <b>Downloads</b>, and the " +
+      "court will reconvene.",
+    cliOnly: "Still CLI-only: the cleanup order, award packs, the court record, and " +
+      "co-defendant hearings: <code>pip install snap-judgment</code>, or judge another folder above."
+  };
+
+  var courtButtons = document.querySelectorAll(".court-btn");
+  function setCourt(court) {
+    currentCourt = court;
+    currentStats = null;
+    currentSample = false;
+    result.hidden = true;
+    noEvidence.hidden = true;
+    setStatus("");
+    courtButtons.forEach(function (b) {
+      b.classList.toggle("active", b.getAttribute("data-court") === court);
+    });
+    var dl = court === "downloads";
+    btn.textContent = dl ? "Choose your Downloads folder" : "Choose your screenshots folder";
+    var privacyShots = document.getElementById("privacyShots");
+    var privacyDl = document.getElementById("privacyDl");
+    if (privacyShots && privacyDl) {
+      privacyShots.hidden = dl;
+      privacyDl.hidden = !dl;
+    }
+    var noticeShots = document.getElementById("noticeShots");
+    var noticeDl = document.getElementById("noticeDl");
+    if (noticeShots && noticeDl) {
+      noticeShots.hidden = dl;
+      noticeDl.hidden = !dl;
+    }
+    if (explainerEl) explainerEl.innerHTML = dl ? DL_COPY.explainer : shotsCopy.explainer;
+    if (defendantEl) defendantEl.textContent = dl ? DL_COPY.defendant : shotsCopy.defendant;
+    if (noEvidenceTextEl) noEvidenceTextEl.innerHTML = dl ? DL_COPY.noEvidence : shotsCopy.noEvidence;
+    if (cliOnlyEl) cliOnlyEl.innerHTML = dl ? DL_COPY.cliOnly : shotsCopy.cliOnly;
+  }
+  courtButtons.forEach(function (b) {
+    b.addEventListener("click", function () {
+      var court = b.getAttribute("data-court") || "screenshots";
+      if (court !== currentCourt) setCourt(court);
+    });
+  });
+
   btn.addEventListener("click", function () {
     if (typeof window.showDirectoryPicker === "function") {
-      scanWithPicker().catch(function () { setStatus(""); }); /* cancel: silent */
+      var scan = currentCourt === "downloads" ? scanDownloadsWithPicker : scanWithPicker;
+      scan().catch(function () { setStatus(""); }); /* cancel: silent */
     } else {
       input.click();
     }
@@ -912,6 +1442,14 @@ function initDemo() {
   var sampleBtn = document.getElementById("sampleBtn");
   if (sampleBtn) {
     sampleBtn.addEventListener("click", function () {
+      if (currentCourt === "downloads") {
+        var dlStats = computeDownloadsStats(makeSampleDownloadsFiles());
+        currentStats = dlStats;
+        currentSample = true;
+        setStatus("");
+        render(dlStats);
+        return;
+      }
       var records = makeSampleFiles();
       var stats = computeStats(records);
       stats.pleaBargain = computePleaBargain(records, 2);
@@ -925,6 +1463,19 @@ function initDemo() {
   input.addEventListener("change", function () {
     if (!input.files || input.files.length === 0) return;
     var picked = Array.prototype.slice.call(input.files, 0, MAX_SCANNED);
+    if (currentCourt === "downloads") {
+      /* The docket judges the surface only: files exactly one level
+       * below the picked folder, nothing deeper. */
+      var dlCandidates = [];
+      for (var j = 0; j < picked.length; j++) {
+        if (isTopLevelPath(picked[j].webkitRelativePath || "")) {
+          dlCandidates.push(picked[j]);
+        }
+      }
+      finishDownloadsScan(dlCandidates);
+      input.value = "";
+      return;
+    }
     var candidates = [];
     for (var i = 0; i < picked.length; i++) {
       var file = picked[i];
@@ -981,15 +1532,59 @@ function initDemo() {
       }
     }
     if (entries.length === 0) {
-      /* Fallback: the flat file list, no folder names available. */
+      /* Fallback: the flat file list, no folder names available. A
+       * flat list is all surface, so the docket takes every file. */
       if (dataTransfer.files && dataTransfer.files.length > 0) {
         var picked = Array.prototype.slice.call(dataTransfer.files, 0, MAX_SCANNED);
+        if (currentCourt === "downloads") {
+          await finishDownloadsScan(picked);
+          return;
+        }
         var flat = [];
         for (var p = 0; p < picked.length; p++) {
           if (isScreenshotFile(picked[p].name, "")) flat.push(picked[p]);
         }
         await finishScan(flat);
       }
+      return;
+    }
+    if (currentCourt === "downloads") {
+      /* The docket reads the surface of a dropped folder: its own
+       * files, and nothing from any subfolder. */
+      var dlCandidates = [];
+      var dlScanned = 0;
+      async function traverseDownloads(entry) {
+        if (dlScanned >= MAX_SCANNED) return;
+        if (entry.isFile) {
+          dlScanned++;
+          var file = await new Promise(function (resolve, reject) {
+            entry.file(resolve, reject);
+          });
+          dlCandidates.push(file);
+        } else if (entry.isDirectory) {
+          var reader = entry.createReader();
+          var children;
+          do {
+            children = await new Promise(function (resolve, reject) {
+              reader.readEntries(resolve, reject);
+            });
+            for (var ch = 0; ch < children.length; ch++) {
+              if (children[ch].isFile && dlScanned < MAX_SCANNED) {
+                dlScanned++;
+                var childFile = await new Promise(function (resolve, reject) {
+                  children[ch].file(resolve, reject);
+                });
+                dlCandidates.push(childFile);
+              }
+            }
+          } while (children.length > 0);
+        }
+      }
+      setStatus("Reading the evidence...");
+      for (var de = 0; de < entries.length; de++) {
+        await traverseDownloads(entries[de]);
+      }
+      await finishDownloadsScan(dlCandidates);
       return;
     }
     var candidates = [];
@@ -1081,7 +1676,7 @@ function initDemo() {
 
   /* --- the presiding judge ------------------------------------------ */
 
-  var judgeButtons = document.querySelectorAll(".judge-btn");
+  var judgeButtons = document.querySelectorAll(".judge-btn[data-voice]");
   judgeButtons.forEach(function (b) {
     b.addEventListener("click", function () {
       currentVoice = b.getAttribute("data-voice") || "fair";
@@ -1090,14 +1685,16 @@ function initDemo() {
       });
       if (currentStats && currentStats.count > 0) {
         renderSentence(currentStats);
-        drawCard(currentStats);
+        drawCurrentCard(currentStats);
       }
     });
   });
 
   function renderSentence(stats) {
     var el = document.getElementById("sentenceLine");
-    el.textContent = sentenceFor(stats.tier, currentVoice);
+    el.textContent = stats.court === "downloads"
+      ? downloadsSentenceFor(stats.tier, currentVoice)
+      : sentenceFor(stats.tier, currentVoice);
     var judgeEl = document.getElementById("judgeName");
     if (judgeEl) judgeEl.textContent = JUDGE_NAMES[currentVoice] + " presiding.";
   }
@@ -1122,7 +1719,9 @@ function initDemo() {
     var box = document.getElementById("commentaryBox");
     var line = document.getElementById("commentaryLine");
     if (!box || !line) return;
-    line.textContent = courtCommentary(stats, intensityBand(currentIntensity).level);
+    line.textContent = stats.court === "downloads"
+      ? downloadsCommentary(stats, intensityBand(currentIntensity).level)
+      : courtCommentary(stats, intensityBand(currentIntensity).level);
     box.hidden = false;
   }
 
@@ -1170,6 +1769,36 @@ function initDemo() {
     render(stats);
   }
 
+  /* The docket's picker scan: the picked folder's own files only.
+   * Subfolders are not entered, and nothing is read from any file:
+   * the File objects' name, size, and lastModified are the evidence. */
+  async function scanDownloadsWithPicker() {
+    var dir = await window.showDirectoryPicker();
+    var candidates = [];
+    var scanned = 0;
+    setStatus("Reading the evidence...");
+    for await (var entry of dir.values()) {
+      if (scanned >= MAX_SCANNED) break;
+      if (entry.kind === "file") {
+        scanned++;
+        candidates.push(await entry.getFile());
+      }
+    }
+    await finishDownloadsScan(candidates);
+  }
+
+  async function finishDownloadsScan(candidateFiles) {
+    setStatus("Reading the evidence: " + candidateFiles.length + " files found...");
+    var records = candidateFiles.map(function (f) {
+      return { name: f.name, size: f.size, mtime: f.lastModified };
+    });
+    var stats = computeDownloadsStats(records);
+    currentStats = stats;
+    currentSample = false;
+    setStatus("");
+    render(stats);
+  }
+
   async function readRecord(file) {
     var dims = null;
     try {
@@ -1188,6 +1817,10 @@ function initDemo() {
   /* --- rendering ------------------------------------------------------ */
 
   function render(stats) {
+    if (stats && stats.court === "downloads") {
+      renderDownloads(stats);
+      return;
+    }
     if (stats.count === 0) {
       result.hidden = true;
       noEvidence.hidden = false;
@@ -1243,6 +1876,76 @@ function initDemo() {
     }
 
     drawCard(stats);
+    result.hidden = false;
+    result.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  /* The docket's hearing page: the same layout as the screenshots
+   * court, with the CLI's downloads evidence table. Exhibits, the
+   * heatmap, and the plea bargain are screenshots-court business, so
+   * those boxes are emptied here. */
+  function renderDownloads(stats) {
+    if (stats.count === 0) {
+      result.hidden = true;
+      noEvidence.hidden = false;
+      noEvidence.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    noEvidence.hidden = true;
+    var banner = document.getElementById("sampleBanner");
+    if (banner) banner.hidden = !currentSample;
+    document.getElementById("verdictTier").textContent = stats.tier;
+    document.getElementById("verdictSummary").textContent =
+      stats.count.toLocaleString("en-US") + " files, " + stats.totalSizeHuman +
+      " of evidence, spanning " + stats.spanStartLabel + " to " + stats.spanEndLabel + ".";
+    renderSentence(stats);
+    renderCommentary(stats);
+
+    var rows = [
+      ["Total files", stats.count.toLocaleString("en-US")],
+      ["Total size", stats.totalSizeHuman + " (" + stats.totalBytes.toLocaleString("en-US") + " bytes)"],
+      ["Largest file", stats.largestName + " (" + stats.largestHuman + ")"],
+      ["Date span", stats.spanStartLabel + " - " + stats.spanEndLabel + " (" +
+        (stats.spanDays + 1).toLocaleString("en-US") + (stats.spanDays === 0 ? " day" : " days") + ")"],
+      ["Oldest file", stats.oldestName + " (" + stats.oldestLabel + ")"],
+      ["Installers", stats.installerCount + " (" + stats.installerHuman + ")"],
+      ["Archives", String(stats.archiveCount)],
+      ["Duplicate downloads", stats.duplicateGroups +
+        (stats.duplicateGroups === 1 ? " group, " : " groups, ") +
+        stats.duplicateExtra + " extra copies"]
+    ];
+    if (stats.duplicateExtraBytes > 0) {
+      rows.push(["Duplicate waste", stats.duplicateWasteHuman]);
+    }
+    rows.push(["Over a year old", stats.oldCount + " (" + stats.oldShare.toFixed(1) + "%)"]);
+    if (stats.extensions.length > 0) {
+      rows.push(["Top file types", stats.extensions.slice(0, 5).map(function (e) {
+        return e.ext + " " + e.count;
+      }).join(", ")]);
+    }
+
+    var tbody = document.getElementById("evidenceBody");
+    tbody.innerHTML = "";
+    rows.forEach(function (r) {
+      var tr = document.createElement("tr");
+      var th = document.createElement("th"); th.textContent = r[0];
+      var td = document.createElement("td"); td.textContent = r[1];
+      tr.appendChild(th); tr.appendChild(td);
+      tbody.appendChild(tr);
+    });
+
+    document.getElementById("exhibitsBox").innerHTML = "";
+    document.getElementById("heatmapBox").innerHTML = "";
+    document.getElementById("pleaBox").innerHTML = "";
+    renderAwards(stats);
+
+    var xLink = document.getElementById("postToX");
+    if (xLink) {
+      xLink.href = "https://twitter.com/intent/tweet?text=" +
+        encodeURIComponent(verdictPostText(stats));
+    }
+
+    drawDownloadsCard(stats);
     result.hidden = false;
     result.scrollIntoView({ behavior: "smooth", block: "start" });
   }
@@ -1361,6 +2064,91 @@ function initDemo() {
     closing.className = "plea-closing";
     closing.textContent = pleaClosing(plea, stats.tier);
     box.appendChild(closing);
+  }
+
+  function drawCurrentCard(stats) {
+    if (stats.court === "downloads") drawDownloadsCard(stats);
+    else drawCard(stats);
+  }
+
+  /* The docket's share card: the screenshots card's layout, with the
+   * docket's header, its file evidence, up to two award names, and
+   * its own footer line. */
+  function drawDownloadsCard(stats) {
+    var canvas = document.getElementById("card");
+    var ctx = canvas.getContext("2d");
+    var W = 1200, H = 630;
+    ctx.fillStyle = "#101014";
+    ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = "#d4af37";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(18, 18, W - 36, H - 36);
+    ctx.textAlign = "center";
+
+    try { ctx.letterSpacing = "6px"; } catch (e) { /* cosmetic only */ }
+    ctx.fillStyle = "#d4af37";
+    ctx.font = "600 27px Georgia, 'Times New Roman', serif";
+    ctx.fillText("THE DOWNLOADS DOCKET", W / 2, 92);
+
+    try { ctx.letterSpacing = "2px"; } catch (e) { /* cosmetic only */ }
+    ctx.fillStyle = "#f5f2ea";
+    ctx.font = "bold 96px Arial, Helvetica, sans-serif";
+    ctx.fillText("SNAP JUDGMENT", W / 2, 208);
+
+    ctx.fillStyle = "#d4af37";
+    ctx.font = "bold 68px Arial, Helvetica, sans-serif";
+    var tier = stats.tier;
+    while (ctx.measureText(tier).width > W - 140 && tier.length > 4) {
+      var size = parseInt(ctx.font.match(/(\d+)px/)[1], 10) - 4;
+      ctx.font = "bold " + size + "px Arial, Helvetica, sans-serif";
+      if (size <= 30) break;
+    }
+    ctx.fillText(tier, W / 2, 308);
+
+    ctx.strokeStyle = "#4a4638";
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(240, 348); ctx.lineTo(W - 240, 348); ctx.stroke();
+
+    ctx.fillStyle = "#f5f2ea";
+    ctx.font = "34px Menlo, Consolas, monospace";
+    ctx.fillText(stats.count.toLocaleString("en-US") + " files - " + stats.totalSizeHuman +
+      " - " + monthYearLabel(stats.spanStart) + " - " + monthYearLabel(stats.spanEnd), W / 2, 408);
+
+    ctx.fillStyle = "#a49fb2";
+    ctx.font = "30px Arial, Helvetica, sans-serif";
+    ctx.fillText(stats.installerCount + " installers - " + stats.archiveCount +
+      " archives - " + stats.duplicateExtra + " duplicate extras", W / 2, 458);
+
+    if (stats.awards.length > 0) {
+      ctx.fillStyle = "#e8e3d8";
+      ctx.font = "25px Arial, Helvetica, sans-serif";
+      ctx.fillText("Awards: " + stats.awards.slice(0, 2).map(function (a) { return a.name; }).join(", "), W / 2, 500);
+    }
+
+    /* The sentence, in the presiding judge's voice. */
+    var sentence = downloadsSentenceFor(stats.tier, currentVoice);
+    if (sentence) {
+      ctx.fillStyle = "#cfc9ba";
+      var sSize = 24;
+      ctx.font = "italic " + sSize + "px Georgia, 'Times New Roman', serif";
+      while (ctx.measureText(sentence).width > W - 120 && sSize > 14) {
+        sSize -= 2;
+        ctx.font = "italic " + sSize + "px Georgia, 'Times New Roman', serif";
+      }
+      var shown = sentence;
+      while (ctx.measureText(shown).width > W - 120 && shown.length > 4) {
+        shown = shown.slice(0, -2);
+      }
+      if (shown !== sentence) shown = shown.replace(/[\s,.;:]+$/, "") + "…";
+      ctx.fillText(shown, W / 2, 540);
+    }
+
+    ctx.fillStyle = "#8f8b7d";
+    ctx.font = "23px Arial, Helvetica, sans-serif";
+    ctx.fillText("Judged from file names, sizes, and dates only. No file was opened.", W / 2, 574);
+    ctx.fillStyle = "#d4af37";
+    ctx.font = "600 23px Menlo, Consolas, monospace";
+    ctx.fillText("pip install snap-judgment", W / 2, 602);
   }
 
   function drawCard(stats) {

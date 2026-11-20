@@ -45,7 +45,7 @@ try:
 except ModuleNotFoundError:  # Python 3.9 and 3.10 have no tomllib
     tomllib = None
 
-__version__ = "0.9.0"
+__version__ = "0.10.0"
 
 # ---------------------------------------------------------------------------
 # detection
@@ -1765,7 +1765,8 @@ def render_downloads_no_evidence() -> str:
 
 def render_downloads_report(stats: dict, tier: str, sentence: str,
                             awards: list[dict], voice: str = "fair",
-                            commentary: str | None = None) -> str:
+                            commentary: str | None = None,
+                            year: int | None = None) -> str:
     out = [
         "=" * 62,
         "SNAP JUDGMENT - THE DOWNLOADS DOCKET",
@@ -1784,6 +1785,10 @@ def render_downloads_report(stats: dict, tier: str, sentence: str,
         f"  {tier}",
         f"  {stats['count']:,} files, {stats['total_human']} of evidence,",
         f"  spanning {_fmt_date(stats['first_date'])} to {_fmt_date(stats['last_date'])}.",
+    ]
+    if year is not None:
+        out.append(f"  Scope: year {year}")
+    out += [
         "",
         "THE EVIDENCE",
     ]
@@ -1809,7 +1814,10 @@ def render_downloads_report(stats: dict, tier: str, sentence: str,
 
 def render_downloads_markdown(stats: dict, tier: str, sentence: str,
                               awards: list[dict], voice: str = "fair",
-                              commentary: str | None = None) -> str:
+                              commentary: str | None = None,
+                              year: int | None = None,
+                              rematch: dict | None = None,
+                              rematch_requested: bool = False) -> str:
     out = [
         "# Snap Judgment - The Downloads Docket",
         "",
@@ -1821,6 +1829,8 @@ def render_downloads_markdown(stats: dict, tier: str, sentence: str,
     intro = JUDGE_INTROS.get(voice)
     if intro:
         out.append(_format_intro(intro, tier, stats["count"]))
+    if year is not None:
+        out.append(f"Scope: year {year}")
     out += ["", "## The Evidence", ""]
     for label, value in _dl_evidence_lines(stats):
         out.append(f"- **{label}:** {value}")
@@ -1838,6 +1848,13 @@ def render_downloads_markdown(stats: dict, tier: str, sentence: str,
     out += ["", "## The Sentence", "", sentence, ""]
     if commentary is not None:
         out += ["## Court Commentary", "", commentary, ""]
+    if rematch_requested:
+        out += ["## Rematch", ""]
+        if rematch is None:
+            out.append("No prior hearing on record for these folders.")
+        else:
+            out.append(downloads_rematch_line(rematch, tier))
+        out.append("")
     out += [DL_FOOTER, ""]
     return "\n".join(out)
 
@@ -1901,6 +1918,334 @@ def downloads_oneline(stats: dict, tier: str) -> str:
         f"{tier} · {stats['count']:,} files · "
         f"{stats['total_human']} · {span}"
     )
+
+
+def _dl_headline_stat(stats: dict) -> tuple[str, str]:
+    """The downloads card's headline stat: duplicate waste when there
+    is any, otherwise the installer count. (value, label)"""
+    if stats["duplicate_extra_bytes"] > 0:
+        return (
+            human_bytes(stats["duplicate_extra_bytes"]),
+            "Duplicate waste",
+        )
+    return (f"{stats['installer_count']}", "Installers")
+
+
+def render_downloads_card(stats: dict, tier: str, sentence: str,
+                          awards: list[dict]) -> str:
+    """The downloads docket's HTML share card: the screenshots card's
+    layout, speaking for the docket."""
+    gb = stats["total_bytes"] / (1024 ** 3)
+    headline_value, headline_label = _dl_headline_stat(stats)
+    top_stats = [
+        (headline_label, headline_value),
+        ("Archives", f"{stats['archive_count']}"),
+        ("Over a year old", f"{stats['old_share']:.1f}%"),
+    ]
+    stats_html = "\n".join(
+        f'      <div class="stat"><div class="stat-value">{html.escape(v)}</div>'
+        f'<div class="stat-label">{html.escape(k)}</div></div>'
+        for k, v in top_stats
+    )
+    if awards:
+        awards_html = "\n".join(
+            f"        <li><strong>{html.escape(a['name'])}</strong> - {html.escape(a['evidence'])}</li>"
+            for a in awards[:2]
+        )
+    else:
+        awards_html = "        <li>None. The court is as surprised as you are.</li>"
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Snap Judgment - {html.escape(tier)}</title>
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ background: #0d0d12; color: #e8e3d8; font-family: Georgia, 'Times New Roman', serif;
+         display: flex; justify-content: center; padding: 40px 16px; }}
+  .card {{ max-width: 640px; width: 100%; background: #16161f; border: 2px solid #b08d3c;
+          border-radius: 10px; padding: 36px 40px; box-shadow: 0 12px 40px rgba(0,0,0,.6); }}
+  .court {{ text-align: center; letter-spacing: 3px; font-size: 12px; color: #b08d3c;
+           text-transform: uppercase; }}
+  h1 {{ text-align: center; font-size: 30px; margin: 10px 0 4px; }}
+  .tier {{ text-align: center; font-size: 22px; color: #d4af5a; margin-bottom: 18px; }}
+  .headline {{ display: flex; justify-content: space-around; text-align: center;
+              border-top: 1px solid #33333f; border-bottom: 1px solid #33333f;
+              padding: 16px 0; margin-bottom: 18px; }}
+  .headline .num {{ font-size: 26px; color: #fff; }}
+  .headline .lbl {{ font-size: 11px; letter-spacing: 2px; color: #9a94a6; text-transform: uppercase; }}
+  .stats {{ display: flex; justify-content: space-between; gap: 12px; margin-bottom: 18px; }}
+  .stat {{ flex: 1; background: #1e1e2a; border-radius: 8px; padding: 12px; text-align: center; }}
+  .stat-value {{ font-size: 15px; color: #fff; }}
+  .stat-label {{ font-size: 11px; letter-spacing: 1px; color: #9a94a6; text-transform: uppercase; margin-top: 4px; }}
+  h2 {{ font-size: 13px; letter-spacing: 2px; color: #b08d3c; text-transform: uppercase; margin-bottom: 8px; }}
+  ul {{ list-style: none; margin-bottom: 18px; }}
+  li {{ padding: 4px 0; font-size: 14px; }}
+  .sentence {{ font-style: italic; color: #cfc9ba; border-top: 1px solid #33333f; padding-top: 14px; }}
+  .foot {{ text-align: center; font-size: 11px; color: #6d6878; margin-top: 16px; }}
+  .install {{ text-align: center; font-size: 10px; color: #6d6878; margin-top: 4px;
+             font-family: 'Courier New', monospace; }}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="court">The Downloads Docket</div>
+    <h1>Snap Judgment</h1>
+    <div class="tier">{html.escape(tier)}</div>
+    <div class="headline">
+      <div><div class="num">{stats['count']:,}</div><div class="lbl">Files</div></div>
+      <div><div class="num">{gb:.2f} GB</div><div class="lbl">Of evidence</div></div>
+      <div><div class="num">{_fmt_date(stats['first_date'])} - {_fmt_date(stats['last_date'])}</div><div class="lbl">Span</div></div>
+    </div>
+    <div class="stats">
+{stats_html}
+    </div>
+    <h2>Awards</h2>
+    <ul>
+{awards_html}
+    </ul>
+    <div class="sentence">{html.escape(sentence)}</div>
+    <div class="foot">Judged from file names, sizes, and dates only. No file was opened. Snap Judgment, Ghost Developer Studio.</div>
+    <div class="install">pip install snap-judgment</div>
+  </div>
+</body>
+</html>
+"""
+
+
+def render_downloads_svg(stats: dict, tier: str, sentence: str,
+                         awards: list[dict]) -> str:
+    """The downloads docket's 1200x630 SVG share card."""
+    esc = _xml_escape
+    span = f"{stats['first_date']:%b %Y} - {stats['last_date']:%b %Y}"
+    headline_value, headline_label = _dl_headline_stat(stats)
+    stat_cells = [
+        (f"{stats['count']:,}", "FILES", 42),
+        (stats["total_human"], "OF EVIDENCE", 42),
+        (span, "SPAN", 27),
+        (headline_value, headline_label.upper(), 42),
+    ]
+    cells = []
+    for (value, label, size), x in zip(stat_cells, (210, 490, 770, 1050)):
+        cells.append(
+            f'  <text x="{x}" y="348" text-anchor="middle" font-size="{size}" '
+            f'fill="#ffffff">{esc(value)}</text>\n'
+            f'  <text x="{x}" y="384" text-anchor="middle" font-size="16" '
+            f'letter-spacing="3" fill="#9a94a6">{esc(label)}</text>'
+        )
+    stats_svg = "\n".join(cells)
+    if awards:
+        award_names = "  ·  ".join(a["name"] for a in awards[:2])
+    else:
+        award_names = "None. The court is as surprised as you are."
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630" role="img" aria-label="Snap Judgment verdict card">
+  <rect width="1200" height="630" fill="#0d0d12"/>
+  <rect x="24" y="24" width="1152" height="582" rx="14" fill="#16161f" stroke="#b08d3c" stroke-width="3"/>
+  <text x="600" y="92" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="19" letter-spacing="6" fill="#b08d3c">THE DOWNLOADS DOCKET</text>
+  <text x="600" y="158" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="58" font-weight="bold" fill="#e8e3d8">SNAP JUDGMENT</text>
+  <text x="600" y="228" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="46" fill="#d4af5a">{esc(tier)}</text>
+  <line x1="200" y1="262" x2="1000" y2="262" stroke="#33333f" stroke-width="1"/>
+{stats_svg}
+  <text x="600" y="448" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="14" letter-spacing="4" fill="#b08d3c">AWARDS</text>
+  <text x="600" y="486" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="25" fill="#e8e3d8">{esc(award_names)}</text>
+  <text x="600" y="540" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="20" font-style="italic" fill="#cfc9ba">{esc(sentence)}</text>
+  <text x="600" y="574" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="16" fill="#6d6878">Judged from file names, sizes, and dates only. No file was opened.</text>
+  <text x="600" y="598" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="13" letter-spacing="1" fill="#6d6878">pip install snap-judgment</text>
+</svg>
+"""
+
+
+def render_downloads_png(stats: dict, tier: str, sentence: str,
+                         awards: list[dict]) -> bytes:
+    """The downloads docket's 1200x630 PNG share card, drawn with the
+    bitmap font."""
+    canvas = _Canvas(1200, 630, (16, 16, 20))
+    canvas.rect(24, 24, 1176, 606, (22, 22, 31))
+    canvas.border(24, 24, 1176, 606, (176, 141, 60), 3)
+    accent = (176, 141, 60)
+    gold = (212, 175, 90)
+    paper = (232, 227, 216)
+    muted = (154, 148, 166)
+    faint = (109, 104, 120)
+    canvas.text(600, 62, "THE DOWNLOADS DOCKET", 2, accent)
+    canvas.text(600, 104, "SNAP JUDGMENT", 7, paper)
+    canvas.text(600, 186, tier, _fit_scale(tier, 1080, 6), gold)
+    canvas.rect(200, 252, 1000, 254, (51, 51, 63))
+    span = f"{stats['first_date']:%b %Y} - {stats['last_date']:%b %Y}"
+    stats_line = (
+        f"{stats['count']:,} files - {stats['total_human']} - {span}"
+    )
+    canvas.text(600, 282, stats_line, _fit_scale(stats_line, 1080, 3), paper)
+    headline_value, headline_label = _dl_headline_stat(stats)
+    headline_line = f"{headline_label} {headline_value}"
+    canvas.text(600, 348, headline_line,
+                _fit_scale(headline_line, 1080, 3), muted)
+    if awards:
+        awards_line = "Awards: " + ", ".join(a["name"] for a in awards[:2])
+    else:
+        awards_line = "Awards: none"
+    canvas.text(600, 402, awards_line, _fit_scale(awards_line, 1080, 2),
+                paper)
+    if sentence:
+        canvas.text(600, 470, sentence, _fit_scale(sentence, 1080, 2),
+                    (207, 201, 186))
+    canvas.text(600, 566, DL_FOOTER, 2, faint)
+    canvas.text(600, 590, "pip install snap-judgment", 1, faint)
+    return canvas.to_png()
+
+
+def render_downloads_html_report(stats: dict, tier: str, sentence: str,
+                                 awards: list[dict], voice: str = "fair",
+                                 commentary: str | None = None,
+                                 year: int | None = None) -> str:
+    """The downloads docket's full HTML report: the screenshots
+    report's patterns, the docket's evidence."""
+    esc = html.escape
+    rows = "\n".join(
+        f"      <tr><td>{esc(label)}</td><td>{esc(value)}</td></tr>"
+        for label, value in _dl_evidence_lines(stats)
+    )
+    sections = []
+    intro = JUDGE_INTROS.get(voice)
+    if intro:
+        sections.append(
+            f'    <p class="intro">{esc(_format_intro(intro, tier, stats["count"]))}</p>'
+        )
+    if year is not None:
+        sections.append(f'    <p class="intro">Scope: year {year}</p>')
+    sections.append(f"""    <h2>The Evidence</h2>
+    <table>
+{rows}
+    </table>""")
+    if awards:
+        items = "\n".join(
+            f"        <li><strong>{esc(a['name'])}</strong> - "
+            f"{esc(a['evidence'])}</li>"
+            for a in awards
+        )
+    else:
+        items = "        <li>None. The court is as surprised as you are.</li>"
+    sections.append(f"""    <h2>Awards</h2>
+    <ul>
+{items}
+    </ul>""")
+    body = "\n".join(sections)
+    commentary_html = ""
+    if commentary is not None:
+        commentary_html = (
+            f'\n    <h2>Court Commentary</h2>'
+            f'\n    <p>{esc(commentary)}</p>'
+        )
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Snap Judgment - {esc(tier)}</title>
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ background: #0d0d12; color: #e8e3d8; font-family: Georgia, 'Times New Roman', serif;
+         display: flex; justify-content: center; padding: 40px 16px; }}
+  .report {{ max-width: 720px; width: 100%; background: #16161f; border: 2px solid #b08d3c;
+            border-radius: 10px; padding: 36px 40px; box-shadow: 0 12px 40px rgba(0,0,0,.6); }}
+  .court {{ text-align: center; letter-spacing: 3px; font-size: 12px; color: #b08d3c;
+           text-transform: uppercase; }}
+  h1 {{ text-align: center; font-size: 30px; margin: 10px 0 4px; }}
+  .tier {{ text-align: center; font-size: 24px; color: #d4af5a; margin-bottom: 6px; }}
+  .summary {{ text-align: center; color: #cfc9ba; margin-bottom: 10px; }}
+  .intro {{ text-align: center; font-style: italic; color: #9a94a6; margin-bottom: 8px; }}
+  h2 {{ font-size: 13px; letter-spacing: 2px; color: #b08d3c; text-transform: uppercase;
+       margin: 22px 0 10px; border-top: 1px solid #33333f; padding-top: 16px; }}
+  table {{ width: 100%; border-collapse: collapse; }}
+  td {{ padding: 5px 4px; font-size: 14px; vertical-align: top; }}
+  td:first-child {{ color: #9a94a6; width: 42%; }}
+  ul {{ list-style: none; }}
+  li {{ padding: 4px 0; font-size: 14px; }}
+  .sentence {{ font-style: italic; color: #cfc9ba; border-top: 1px solid #33333f;
+              padding-top: 14px; margin-top: 22px; }}
+  .foot {{ text-align: center; font-size: 11px; color: #6d6878; margin-top: 16px; }}
+</style>
+</head>
+<body>
+  <div class="report">
+    <div class="court">The Downloads Docket</div>
+    <h1>Snap Judgment</h1>
+    <div class="tier">{esc(tier)}</div>
+    <div class="summary">{stats['count']:,} files, {esc(stats['total_human'])} of evidence,
+      spanning {_fmt_date(stats['first_date'])} to {_fmt_date(stats['last_date'])}.</div>
+{body}
+    <div class="sentence">{esc(sentence)}</div>{commentary_html}
+    <div class="foot">Judged from file names, sizes, and dates only. No file was opened. Snap Judgment, Ghost Developer Studio.</div>
+  </div>
+</body>
+</html>
+"""
+
+
+def build_downloads_wrapped_posts(stats: dict, tier: str,
+                                  awards: list[dict], year: int) -> str:
+    """The downloads Wrapped kit's post.txt: a SHORT post (<=280
+    chars) and a STANDARD post, in the docket's own wording."""
+    short = (
+        f"My {year} in downloads, judged by Snap Judgment: "
+        f"{stats['count']:,} files, verdict {tier}, "
+        f"{stats['installer_count']} installers kept, "
+        f"{human_bytes(stats['duplicate_extra_bytes'])} of duplicate "
+        f"waste. Names, sizes, and dates only; no file was opened. "
+        f"{REPO_URL}"
+    )
+    if len(short) > 280:  # very large numbers: fall back to a tighter draft
+        short = (
+            f"My {year} in downloads, judged by Snap Judgment: "
+            f"{stats['count']:,} files, verdict {tier}. "
+            f"Names, sizes, and dates only; no file was opened. "
+            f"{REPO_URL}"
+        )
+    if awards:
+        awards_line = "Top awards: " + ", ".join(
+            a["name"] for a in awards[:2]
+        )
+    else:
+        awards_line = "Awards: none. The court is as surprised as you are."
+    standard = "\n".join([
+        f"My {year} in downloads, judged by Snap Judgment.",
+        "",
+        f"Verdict: {tier}",
+        f"{stats['count']:,} files, {stats['total_human']} of evidence.",
+        awards_line,
+        "",
+        "Snap Judgment reads file names, sizes, and dates only. "
+        "It never opens the files.",
+        REPO_URL,
+    ])
+    return "\n".join([
+        "SHORT POST",
+        short,
+        "",
+        "STANDARD POST",
+        standard,
+        "",
+    ])
+
+
+def write_downloads_csv(path, files: list) -> None:
+    """Per-file records for every judged download: one row per file,
+    categorized by the docket's own extension sets."""
+    rows = sorted(files, key=lambda f: f.mtime)
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(
+            ["name", "size_bytes", "modified", "extension", "category"]
+        )
+        for f in rows:
+            if f.ext in DL_INSTALLER_EXTS:
+                category = "installer"
+            elif f.ext in DL_ARCHIVE_EXTS:
+                category = "archive"
+            else:
+                category = "other"
+            writer.writerow(
+                [f.name, f.size, f.dt.isoformat(), f.ext, category]
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -2671,14 +3016,35 @@ BADGE_TIER_COLORS = {
 }
 
 
+DL_BADGE_TIER_COLORS = {
+    "Tidy Desk": "#4c1",
+    "Mild Clutter": "#97ca00",
+    "Digital Junk Drawer": "#dfb317",
+    "Landfill Adjacent": "#fe7d37",
+    "Hoarding Situation": "#e05d44",
+    "Superfund Site": "#b60205",
+    "No Evidence": "#9f9f9f",
+}
+
+
 def render_badge(tier: str) -> str:
     """A shields-style verdict badge: 'snap judgment' on the left, the
     tier on the right, colored by severity."""
+    return _badge_svg(tier, BADGE_TIER_COLORS)
+
+
+def render_downloads_badge(tier: str) -> str:
+    """The downloads docket's badge: the same shields style, colored
+    by the docket's own severity ladder."""
+    return _badge_svg(tier, DL_BADGE_TIER_COLORS)
+
+
+def _badge_svg(tier: str, colors: dict) -> str:
     esc = _xml_escape
     left_text = "snap judgment"
     left_w = int(len(left_text) * 6.5) + 12
     right_w = int(len(tier) * 6.5) + 12
-    color = BADGE_TIER_COLORS.get(tier, "#9f9f9f")
+    color = colors.get(tier, "#9f9f9f")
     return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{left_w + right_w}" height="20" role="img" aria-label="snap judgment: {esc(tier)}">
   <rect width="{left_w}" height="20" fill="#555555"/>
   <rect x="{left_w}" width="{right_w}" height="20" fill="{color}"/>
@@ -3216,6 +3582,85 @@ def render_rematch_section(rematch: dict | None, current_tier: str) -> str:
     return "\n".join(out)
 
 
+def build_downloads_rematch(records: list[dict], folder_names: list[str],
+                            current_count: int, current_bytes: int,
+                            current_tier: str) -> dict | None:
+    """Compare this downloads hearing against the most recent
+    DOWNLOADS hearing in the court record whose folder set matches
+    exactly. None when there is no prior downloads hearing."""
+    match = None
+    for record in records:
+        if record.get("court") != "downloads":
+            continue
+        rec_folders = record.get("folders") or []
+        if sorted(rec_folders) == sorted(folder_names):
+            match = record
+    if match is None:
+        return None
+    try:
+        prev_count = int(match["count"])
+        prev_bytes = int(match.get("total_bytes") or 0)
+        prev_tier = str(match["verdict"])
+        prev_date = datetime.fromisoformat(match["timestamp"]).date()
+    except Exception:
+        return None
+    prev_rank = DL_TIER_RANKS.get(_normalize_tier_name(prev_tier), -1)
+    cur_rank = DL_TIER_RANKS.get(_normalize_tier_name(current_tier), -1)
+    if cur_rank > prev_rank:
+        change = "worsened"
+    elif cur_rank < prev_rank:
+        change = "improved"
+    else:
+        change = "unchanged"
+    return {
+        "previous_count": prev_count,
+        "delta": current_count - prev_count,
+        "previous_bytes": prev_bytes,
+        "bytes_delta": current_bytes - prev_bytes,
+        "previous_tier": prev_tier,
+        "date": prev_date,
+        "change": change,
+    }
+
+
+def downloads_rematch_line(rematch: dict, current_tier: str) -> str:
+    delta = rematch["delta"]
+    delta_text = f"+{delta}" if delta > 0 else f"{delta}"
+    bytes_delta = rematch["bytes_delta"]
+    if bytes_delta > 0:
+        size_text = f"+{human_bytes(bytes_delta)}"
+    elif bytes_delta < 0:
+        size_text = f"-{human_bytes(-bytes_delta)}"
+    else:
+        size_text = "0 B"
+    base = (
+        f"Since your last hearing ({_fmt_date(rematch['date'])}): "
+        f"{delta_text} files ({size_text}). "
+    )
+    if rematch["change"] == "worsened":
+        return base + (
+            f"The verdict has worsened from {rematch['previous_tier']} "
+            f"to {current_tier}."
+        )
+    if rematch["change"] == "improved":
+        return base + (
+            f"The verdict has improved from {rematch['previous_tier']} "
+            f"to {current_tier}."
+        )
+    return base + f"The verdict is unchanged: {current_tier}, again."
+
+
+def render_downloads_rematch_section(rematch: dict | None,
+                                     current_tier: str) -> str:
+    out = ["REMATCH"]
+    if rematch is None:
+        out.append("  No prior hearing on record for these folders.")
+    else:
+        out.append(f"  {downloads_rematch_line(rematch, current_tier)}")
+    out.append("")
+    return "\n".join(out)
+
+
 def render_history(records: list[dict]) -> str:
     out = ["COURT RECORD - prior hearings", ""]
     for record in records:
@@ -3616,22 +4061,11 @@ def _run_downloads_court(args) -> int:
     belong to the screenshots court are refused with a plain error.
     """
     unsupported = [
-        ("--card", args.card is not None),
-        ("--svg", args.svg is not None),
-        ("--png", args.png is not None),
-        ("--badge", args.badge is not None),
-        ("--html", args.html is not None),
-        ("--wrapped-kit", args.wrapped_kit is not None),
         ("--vs", args.vs is not None),
         ("--vs-year", args.vs_year is not None),
-        ("--rematch", bool(args.rematch)),
         ("--plea-bargain", bool(args.plea_bargain)),
         ("--cleanup-list", args.cleanup_list is not None),
         ("--judge-file", args.judge_file is not None),
-        ("--year", args.year is not None),
-        ("--since", args.since is not None),
-        ("--until", args.until is not None),
-        ("--csv", args.csv is not None),
     ]
     for flag, present in unsupported:
         if present:
@@ -3649,6 +4083,39 @@ def _run_downloads_court(args) -> int:
         except SnapError as exc:
             print(f"snapjudgment: {exc}", file=sys.stderr)
             return 2
+
+    year = None
+    if args.year is not None:
+        if len(args.year) != 4 or not args.year.isdigit():
+            print(
+                "snapjudgment: --year must be a four-digit year, "
+                "e.g. --year 2026",
+                file=sys.stderr,
+            )
+            return 2
+        year = int(args.year)
+
+    since_date = None
+    if args.since is not None:
+        try:
+            since_date = _parse_filter_date(args.since, "--since", False)
+        except SnapError as exc:
+            print(f"snapjudgment: {exc}", file=sys.stderr)
+            return 2
+
+    until_date = None
+    if args.until is not None:
+        try:
+            until_date = _parse_filter_date(args.until, "--until", True)
+        except SnapError as exc:
+            print(f"snapjudgment: {exc}", file=sys.stderr)
+            return 2
+
+    kit_dir = None
+    if args.wrapped_kit is not None:
+        kit_dir = Path(args.wrapped_kit).expanduser()
+        if year is None:
+            year = datetime.now().year
 
     fail_rank = None
     if args.fail_above is not None:
@@ -3686,6 +4153,12 @@ def _run_downloads_court(args) -> int:
 
     skipped_box = [0]
     files = collect_downloads(folders, skipped=skipped_box)
+    if year is not None:
+        files = [f for f in files if f.dt.year == year]
+    if since_date is not None:
+        files = [f for f in files if f.dt.date() >= since_date]
+    if until_date is not None:
+        files = [f for f in files if f.dt.date() <= until_date]
     folder_names = [str(f) for f in folders]
     folder_stats = [
         {
@@ -3700,6 +4173,13 @@ def _run_downloads_court(args) -> int:
     voice = args.judge
 
     if not files:
+        if kit_dir is not None:
+            print(
+                f"snapjudgment: no files from {year} to wrap; "
+                "the kit was not written",
+                file=sys.stderr,
+            )
+            return 2
         if args.json:
             empty_data = {
                 "version": __version__,
@@ -3713,6 +4193,8 @@ def _run_downloads_court(args) -> int:
                 "skipped": skipped_box[0],
                 "awards": [],
             }
+            if year is not None:
+                empty_data["year"] = year
             if intensity is not None:
                 empty_data["commentary"] = downloads_commentary(
                     {}, intensity
@@ -3747,19 +4229,84 @@ def _run_downloads_court(args) -> int:
     if intensity is not None:
         commentary = downloads_commentary(stats, intensity)
 
+    rematch = None
+    if args.rematch:
+        rematch = build_downloads_rematch(
+            read_history(), folder_names, stats["count"],
+            stats["total_bytes"], tier,
+        )
+
+    if args.card:
+        Path(args.card).write_text(
+            render_downloads_card(stats, tier, sentence, awards),
+            encoding="utf-8",
+        )
+    if args.svg:
+        Path(args.svg).write_text(
+            render_downloads_svg(stats, tier, sentence, awards),
+            encoding="utf-8",
+        )
+    if args.png:
+        Path(args.png).write_bytes(
+            render_downloads_png(stats, tier, sentence, awards)
+        )
+    if args.badge:
+        Path(args.badge).write_text(
+            render_downloads_badge(tier), encoding="utf-8"
+        )
+    if args.csv:
+        write_downloads_csv(args.csv, files)
+    if args.html:
+        Path(args.html).write_text(
+            render_downloads_html_report(
+                stats, tier, sentence, awards, voice=voice,
+                commentary=commentary, year=year,
+            ),
+            encoding="utf-8",
+        )
     if args.out:
         Path(args.out).write_text(
             render_downloads_markdown(
                 stats, tier, sentence, awards, voice=voice,
-                commentary=commentary,
+                commentary=commentary, year=year,
+                rematch=rematch, rematch_requested=args.rematch,
             ),
             encoding="utf-8",
         )
+    kit_written = []
+    if kit_dir is not None:
+        kit_dir.mkdir(parents=True, exist_ok=True)
+        kit_svg = kit_dir / f"wrapped-{year}.svg"
+        kit_svg.write_text(
+            render_downloads_svg(stats, tier, sentence, awards),
+            encoding="utf-8",
+        )
+        kit_post = kit_dir / "post.txt"
+        kit_post.write_text(
+            build_downloads_wrapped_posts(stats, tier, awards, year),
+            encoding="utf-8",
+        )
+        kit_written = [kit_svg, kit_post]
+
     if args.json:
         data = build_downloads_json(
             stats, tier, sentence, awards, folder_stats,
             judge=judge_label, commentary=commentary,
         )
+        if year is not None:
+            data["year"] = year
+        if args.rematch:
+            data["rematch"] = (
+                {
+                    "previous_count": rematch["previous_count"],
+                    "delta": rematch["delta"],
+                    "previous_bytes": rematch["previous_bytes"],
+                    "bytes_delta": rematch["bytes_delta"],
+                    "previous_tier": rematch["previous_tier"],
+                    "date": rematch["date"].isoformat(),
+                }
+                if rematch is not None else None
+            )
         print(json.dumps(data, indent=2))
     else:
         if args.oneline:
@@ -3767,8 +4314,14 @@ def _run_downloads_court(args) -> int:
         else:
             print(render_downloads_report(
                 stats, tier, sentence, awards, voice=voice,
-                commentary=commentary,
+                commentary=commentary, year=year,
             ))
+            if args.rematch:
+                print(render_downloads_rematch_section(rematch, tier))
+            if args.badge:
+                print(args.badge)
+            for kit_path in kit_written:
+                print(kit_path)
         append_history({
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "folders": folder_names,

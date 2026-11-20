@@ -3169,8 +3169,11 @@ class DownloadsCourtTests(TempDirCase):
 
     def test_unsupported_flags_error(self):
         self.seed(self.filler(3))
-        for flag, value in (("--png", "card.png"), ("--vs", str(self.root)),
-                            ("--csv", "x.csv"), ("--plea-bargain", None)):
+        for flag, value in (("--vs", str(self.root)),
+                            ("--vs-year", "2025"),
+                            ("--plea-bargain", None),
+                            ("--cleanup-list", "x.txt"),
+                            ("--judge-file", "pack.json")):
             argv = [str(self.root), "--court", "downloads", flag]
             if value is not None:
                 argv.append(value)
@@ -3312,6 +3315,477 @@ class DownloadsCourtTests(TempDirCase):
         self.assertEqual(code, 0)
         self.assertIn("warning", err)
         self.assertIn("The Court of Screenshot Affairs", out)
+
+
+# ---------------------------------------------------------------------------
+# downloads docket citizenship (v0.10.0): cards, badge, HTML report,
+# rematch, year + wrapped kit, CSV, date filters
+# ---------------------------------------------------------------------------
+
+class DownloadsCitizenshipTests(TempDirCase):
+    def setUp(self):
+        super().setUp()
+        self._old_cwd = os.getcwd()
+        self.hist_file = self.root / "court" / "history.jsonl"
+        patcher = mock.patch.object(
+            sj, "history_path", return_value=self.hist_file
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def tearDown(self):
+        os.chdir(self._old_cwd)
+        super().tearDown()
+
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = sj.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def seed(self, specs):
+        """specs: list of (name, size, datetime)."""
+        for name, size, when in specs:
+            write_sized(self.root, name, size, when)
+
+    def filler(self, n, size=1000, start=datetime(2026, 6, 1, 12, 0)):
+        return [
+            (f"file_{i:04d}.dat", size, start + timedelta(days=i % 28))
+            for i in range(n)
+        ]
+
+    def dl_stats(self):
+        files = sj.collect_downloads([self.root])
+        return sj.analyze_downloads(files)
+
+    def seed_record(self, count, total_bytes, verdict,
+                    when="2026-06-03T12:00:00", court="downloads",
+                    folders=None):
+        self.hist_file.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "timestamp": when,
+            "folders": (
+                folders if folders is not None else [str(self.root)]
+            ),
+            "count": count,
+            "total_bytes": total_bytes,
+            "verdict": verdict,
+            "judge": "fair",
+        }
+        if court is not None:
+            record["court"] = court
+        with open(self.hist_file, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+
+    # -- cards -----------------------------------------------------------
+
+    def test_png_card_written_and_valid(self):
+        self.seed(self.filler(30))
+        png = self.root / "card.png"
+        code, _, _ = self.run_main(
+            [str(self.root), "--court", "downloads", "--png", str(png)]
+        )
+        self.assertEqual(code, 0)
+        data = png.read_bytes()
+        self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(data[12:16], b"IHDR")
+        self.assertEqual(int.from_bytes(data[16:20], "big"), 1200)
+        self.assertEqual(int.from_bytes(data[20:24], "big"), 630)
+
+    def test_png_render_is_deterministic(self):
+        self.seed(self.filler(30))
+        stats = self.dl_stats()
+        tier, sentence = sj.downloads_verdict_for(stats["count"])
+        awards = sj.compute_downloads_awards(stats)
+        first = sj.render_downloads_png(stats, tier, sentence, awards)
+        second = sj.render_downloads_png(stats, tier, sentence, awards)
+        self.assertEqual(first, second)
+        self.assertEqual(first[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertGreater(len(first), 1000)
+
+    def test_svg_card_shows_docket_header_and_tier(self):
+        self.seed(self.filler(30))
+        svg = self.root / "card.svg"
+        code, _, _ = self.run_main(
+            [str(self.root), "--court", "downloads", "--svg", str(svg)]
+        )
+        self.assertEqual(code, 0)
+        text = svg.read_text(encoding="utf-8")
+        self.assertIn("THE DOWNLOADS DOCKET", text)
+        self.assertIn("Mild Clutter", text)
+        self.assertIn("FILES", text)
+        self.assertIn("pip install snap-judgment", text)
+
+    def test_svg_card_headline_is_duplicate_waste(self):
+        base = datetime(2026, 6, 1, 12, 0)
+        self.seed([("setup.exe", 5000, base), ("setup (1).exe", 5000, base)])
+        svg = sj.render_downloads_svg(
+            self.dl_stats(), "Tidy Desk", "Sentence: x.", []
+        )
+        self.assertIn("DUPLICATE WASTE", svg)
+        self.assertIn("4.9 KB", svg)
+
+    def test_svg_card_headline_is_installers_without_waste(self):
+        base = datetime(2026, 6, 1, 12, 0)
+        self.seed([(f"tool{i}.exe", 2000, base) for i in range(12)])
+        svg = sj.render_downloads_svg(
+            self.dl_stats(), "Tidy Desk", "Sentence: x.", []
+        )
+        self.assertIn("INSTALLERS", svg)
+        self.assertNotIn("DUPLICATE WASTE", svg)
+
+    def test_html_card_shows_tier_and_files(self):
+        self.seed(self.filler(30))
+        card = self.root / "card.html"
+        code, _, _ = self.run_main(
+            [str(self.root), "--court", "downloads", "--card", str(card)]
+        )
+        self.assertEqual(code, 0)
+        text = card.read_text(encoding="utf-8")
+        self.assertIn("The Downloads Docket", text)
+        self.assertIn("Mild Clutter", text)
+        self.assertIn(">Files<", text)
+        self.assertIn("pip install snap-judgment", text)
+
+    # -- badge -------------------------------------------------------------
+
+    def test_badge_written_shows_tier_and_path_printed(self):
+        self.seed(self.filler(30))
+        badge = self.root / "badge.svg"
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads",
+             "--badge", str(badge)]
+        )
+        self.assertEqual(code, 0)
+        text = badge.read_text(encoding="utf-8")
+        self.assertIn("<svg", text)
+        self.assertIn("snap judgment", text)
+        self.assertIn("Mild Clutter", text)
+        self.assertIn(str(badge), out)
+
+    def test_badge_colors_follow_the_docket_ladder(self):
+        self.assertIn("#4c1", sj.render_downloads_badge("Tidy Desk"))
+        self.assertIn(
+            "#b60205", sj.render_downloads_badge("Superfund Site")
+        )
+        self.assertIn(
+            "Superfund Site", sj.render_downloads_badge("Superfund Site")
+        )
+
+    # -- HTML report -------------------------------------------------------
+
+    def test_html_report_shows_evidence_values(self):
+        base = datetime(2026, 6, 1, 12, 0)
+        self.seed([(f"tool{i}.exe", 2000, base) for i in range(12)])
+        report = self.root / "report.html"
+        code, _, _ = self.run_main(
+            [str(self.root), "--court", "downloads",
+             "--html", str(report)]
+        )
+        self.assertEqual(code, 0)
+        text = report.read_text(encoding="utf-8")
+        self.assertIn("The Downloads Docket", text)
+        self.assertIn("Tidy Desk", text)
+        self.assertIn("Installers", text)
+        self.assertIn("12 (23.4 KB)", text)
+        self.assertIn("tool0.exe", text)
+        self.assertIn("No file was opened.", text)
+
+    # -- rematch -----------------------------------------------------------
+
+    def test_rematch_worsened_with_size_delta(self):
+        self.seed_record(3, 300, "Tidy Desk")
+        self.seed(self.filler(30, size=1000))
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads", "--rematch"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("REMATCH", out)
+        self.assertIn(
+            "Since your last hearing (Jun 3, 2026): +27 files "
+            "(+29.0 KB).", out,
+        )
+        self.assertIn(
+            "The verdict has worsened from Tidy Desk to Mild Clutter.",
+            out,
+        )
+
+    def test_rematch_improved(self):
+        self.seed_record(100, 100_000, "Digital Junk Drawer")
+        self.seed(self.filler(3, size=1000))
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads", "--rematch"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("-97 files (-94.7 KB)", out)
+        self.assertIn(
+            "The verdict has improved from Digital Junk Drawer "
+            "to Tidy Desk.", out,
+        )
+
+    def test_rematch_no_prior_hearing(self):
+        self.seed(self.filler(3))
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads", "--rematch"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("No prior hearing on record for these folders.", out)
+
+    def test_rematch_ignores_screenshots_court_records(self):
+        # a screenshots-court record for the same folders (no court
+        # field, the pre-0.9.0 shape) is not a downloads hearing
+        self.seed_record(3, 300, "Innocent Bystander", court=None)
+        self.seed(self.filler(3))
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads", "--rematch"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("No prior hearing on record for these folders.", out)
+
+    def test_rematch_json(self):
+        self.seed_record(3, 300, "Tidy Desk")
+        self.seed(self.filler(5, size=1000))
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads",
+             "--rematch", "--json"]
+        )
+        self.assertEqual(code, 0)
+        rematch = json.loads(out)["rematch"]
+        self.assertEqual(rematch["previous_count"], 3)
+        self.assertEqual(rematch["delta"], 2)
+        self.assertEqual(rematch["previous_bytes"], 300)
+        self.assertEqual(rematch["bytes_delta"], 4700)
+        self.assertEqual(rematch["previous_tier"], "Tidy Desk")
+        self.assertEqual(rematch["date"], "2026-06-03")
+
+    def test_rematch_json_null_without_record(self):
+        self.seed(self.filler(3))
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads",
+             "--rematch", "--json"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIsNone(json.loads(out)["rematch"])
+
+    def test_rematch_reads_record_before_own_append(self):
+        self.seed(self.filler(3))
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads", "--rematch"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("No prior hearing on record", out)
+        write_sized(self.root, "extra_a.dat", 1000,
+                    datetime(2026, 7, 2, 12, 0))
+        write_sized(self.root, "extra_b.dat", 1000,
+                    datetime(2026, 7, 3, 12, 0))
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads", "--rematch"]
+        )
+        self.assertEqual(code, 0)
+        self.assertNotIn("No prior hearing on record", out)
+        self.assertIn("The verdict is unchanged", out)
+
+    def test_rematch_markdown_section(self):
+        self.seed_record(3, 300, "Tidy Desk")
+        self.seed(self.filler(5, size=1000))
+        md = self.root / "docket.md"
+        code, _, _ = self.run_main(
+            [str(self.root), "--court", "downloads",
+             "--rematch", "--out", str(md)]
+        )
+        self.assertEqual(code, 0)
+        text = md.read_text(encoding="utf-8")
+        self.assertIn("## Rematch", text)
+        self.assertIn("+2 files (+4.6 KB)", text)
+
+    # -- year filter ---------------------------------------------------------
+
+    def test_year_filter_scopes_report(self):
+        specs = [(f"y25_{i}.dat", 100, datetime(2025, 6, 1, 12, 0))
+                 for i in range(5)]
+        specs += [(f"y26_{i}.dat", 100, datetime(2026, 6, 1, 12, 0))
+                  for i in range(3)]
+        self.seed(specs)
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads", "--year", "2025"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("5 files", out)
+        self.assertIn("Scope: year 2025", out)
+
+    def test_year_json_key_only_when_filtered(self):
+        self.seed(self.filler(3))
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads", "--json"]
+        )
+        self.assertEqual(code, 0)
+        self.assertNotIn("year", json.loads(out))
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads",
+             "--year", "2026", "--json"]
+        )
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual(data["year"], 2026)
+        self.assertEqual(data["count"], 3)
+
+    def test_year_invalid_errors(self):
+        self.seed(self.filler(3))
+        code, _, err = self.run_main(
+            [str(self.root), "--court", "downloads", "--year", "26"]
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("--year must be a four-digit year", err)
+
+    # -- wrapped kit ---------------------------------------------------------
+
+    def test_wrapped_kit_writes_svg_and_post(self):
+        year = datetime.now().year
+        base = datetime(year, 6, 1, 12, 0)
+        self.seed([(f"file_{i:04d}.dat", 1000,
+                    base + timedelta(days=i % 28)) for i in range(30)])
+        kit = self.root / "kit"
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads",
+             "--wrapped-kit", str(kit)]
+        )
+        self.assertEqual(code, 0)
+        svg = kit / f"wrapped-{year}.svg"
+        post = kit / "post.txt"
+        self.assertTrue(svg.is_file())
+        self.assertTrue(post.is_file())
+        self.assertIn(str(svg), out)
+        self.assertIn(str(post), out)
+        self.assertIn(
+            "THE DOWNLOADS DOCKET", svg.read_text(encoding="utf-8")
+        )
+        text = post.read_text(encoding="utf-8")
+        self.assertIn("STANDARD POST", text)
+        self.assertIn(f"My {year} in downloads", text)
+        lines = text.splitlines()
+        short = lines[lines.index("SHORT POST") + 1]
+        self.assertLessEqual(len(short), 280)
+        self.assertIn("30 files", short)
+        self.assertIn("Mild Clutter", short)
+
+    def test_wrapped_kit_with_explicit_year(self):
+        base = datetime(2025, 6, 1, 12, 0)
+        self.seed([(f"file_{i:04d}.dat", 1000,
+                    base + timedelta(days=i % 28)) for i in range(12)])
+        kit = self.root / "kit"
+        code, _, _ = self.run_main(
+            [str(self.root), "--court", "downloads",
+             "--year", "2025", "--wrapped-kit", str(kit)]
+        )
+        self.assertEqual(code, 0)
+        self.assertTrue((kit / "wrapped-2025.svg").is_file())
+        text = (kit / "post.txt").read_text(encoding="utf-8")
+        self.assertIn("My 2025 in downloads", text)
+
+    def test_wrapped_kit_empty_year_errors(self):
+        self.seed(self.filler(12))
+        kit = self.root / "kit"
+        code, _, err = self.run_main(
+            [str(self.root), "--court", "downloads",
+             "--year", "2024", "--wrapped-kit", str(kit)]
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("no files from 2024 to wrap", err)
+        self.assertFalse(kit.exists())
+
+    # -- CSV ---------------------------------------------------------------
+
+    def test_csv_header_and_categories(self):
+        base = datetime(2026, 6, 1, 12, 0)
+        self.seed([
+            ("setup.exe", 500, base),
+            ("pack.zip", 300, base + timedelta(days=1)),
+            ("notes.txt", 100, base + timedelta(days=2)),
+            ("driver.msi", 700, base + timedelta(days=3)),
+        ])
+        target = self.root / "files.csv"
+        code, _, _ = self.run_main(
+            [str(self.root), "--court", "downloads", "--csv", str(target)]
+        )
+        self.assertEqual(code, 0)
+        with open(target, newline="", encoding="utf-8") as fh:
+            rows = list(csv.reader(fh))
+        self.assertEqual(
+            rows[0],
+            ["name", "size_bytes", "modified", "extension", "category"],
+        )
+        by_name = {row[0]: row for row in rows[1:]}
+        self.assertEqual(by_name["setup.exe"][1], "500")
+        self.assertEqual(by_name["setup.exe"][3], ".exe")
+        self.assertEqual(by_name["setup.exe"][4], "installer")
+        self.assertEqual(by_name["driver.msi"][4], "installer")
+        self.assertEqual(by_name["pack.zip"][4], "archive")
+        self.assertEqual(by_name["notes.txt"][4], "other")
+
+    # -- date filters --------------------------------------------------------
+
+    def test_since_until_filters(self):
+        self.seed([
+            ("a.dat", 100, datetime(2025, 12, 31, 12, 0)),
+            ("b.dat", 100, datetime(2026, 6, 1, 12, 0)),
+            ("c.dat", 100, datetime(2026, 6, 10, 12, 0)),
+            ("d.dat", 100, datetime(2026, 6, 20, 12, 0)),
+        ])
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads",
+             "--since", "2026-06-10", "--json"]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["count"], 2)
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads",
+             "--until", "2026-06-10", "--json"]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["count"], 3)
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads",
+             "--since", "2026", "--json"]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["count"], 3)
+
+    def test_since_invalid_errors(self):
+        self.seed(self.filler(3))
+        code, _, err = self.run_main(
+            [str(self.root), "--court", "downloads", "--since", "banana"]
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("invalid date for --since", err)
+
+    # -- default output is unchanged -----------------------------------------
+
+    def test_default_terminal_output_matches_demo_example(self):
+        import importlib.util
+
+        class FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 11, 19, 12, 0, 0)
+
+        repo = Path(__file__).resolve().parent.parent
+        spec = importlib.util.spec_from_file_location(
+            "make_downloads_demo", repo / "tools" / "make_downloads_demo.py"
+        )
+        demo = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(demo)
+        folder = self.root / "Downloads"
+        folder.mkdir()
+        demo.build_fixture(folder)
+        with mock.patch.object(sj, "datetime", FrozenDateTime):
+            code, out, _ = self.run_main(
+                [str(folder), "--court", "downloads"]
+            )
+        self.assertEqual(code, 0)
+        expected = (
+            repo / "examples" / "downloads-demo-output.txt"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(out, expected)
 
 
 # ---------------------------------------------------------------------------

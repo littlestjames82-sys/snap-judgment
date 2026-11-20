@@ -474,4 +474,284 @@ check("commentary: No Evidence gets the same gentle line at every band", () => {
   }
 });
 
+/* --- regression: the screenshots core is untouched by the docket ------ */
+
+check("regression: screenshots computeStats output is unchanged", () => {
+  const files = [];
+  for (let i = 0; i < 60; i++) {
+    files.push(shot({
+      mtime: ts(2026, i % 3, 1 + (i % 27), i % 2 === 0 ? 23 : 13),
+      size: 100000
+    }));
+  }
+  const s = demo.computeStats(files);
+  assert.deepStrictEqual({
+    count: s.count, tier: s.tier, totalBytes: s.totalBytes,
+    nightCount: s.nightCount, nightShare: s.nightShare,
+    weekendShare: s.weekendShare, longestStreak: s.longestStreak,
+    duplicateGroups: s.duplicateGroups,
+    duplicateSuspects: s.duplicateSuspects, awards: s.awards
+  }, {
+    count: 60, tier: "Petty Offender", totalBytes: 6000000,
+    nightCount: 30, nightShare: 50, weekendShare: 25, longestStreak: 1,
+    duplicateGroups: 1, duplicateSuspects: 59,
+    awards: [
+      { name: "Night Owl",
+        detail: "30 screenshots between 10 PM and 5 AM (50.0% of the total)." },
+      { name: "Repeat Customer",
+        detail: "60 files share an exact size and dimensions with a sibling. The same screenshot, taken again." },
+      { name: "Creature of Habit",
+        detail: "50.0% of all screenshots were taken in the 1 PM hour. Same time, same impulse." }
+    ]
+  });
+});
+
+/* --- the Downloads Docket --------------------------------------------- */
+
+const DL_NOW = ts(2026, 10, 19, 12); /* the docket tests' fixed clock */
+
+let dlSeq = 0;
+function dlFile(overrides) {
+  dlSeq++;
+  const base = { name: "file-" + dlSeq + ".dat", size: 1000, mtime: ts(2026, 5, 1, 12) };
+  return Object.assign(base, overrides || {});
+}
+function dlFiles(n, overrides) {
+  const out = [];
+  for (let i = 0; i < n; i++) out.push(dlFile(overrides));
+  return out;
+}
+function dlAwardKeys(stats) { return stats.awards.map(a => a.key); }
+
+check("downloads verdict thresholds match the Python DL_TIERS", () => {
+  assert.strictEqual(demo.downloadsVerdictFor(0), "No Evidence");
+  assert.strictEqual(demo.downloadsVerdictFor(1), "Tidy Desk");
+  assert.strictEqual(demo.downloadsVerdictFor(24), "Tidy Desk");
+  assert.strictEqual(demo.downloadsVerdictFor(25), "Mild Clutter");
+  assert.strictEqual(demo.downloadsVerdictFor(99), "Mild Clutter");
+  assert.strictEqual(demo.downloadsVerdictFor(100), "Digital Junk Drawer");
+  assert.strictEqual(demo.downloadsVerdictFor(249), "Digital Junk Drawer");
+  assert.strictEqual(demo.downloadsVerdictFor(250), "Landfill Adjacent");
+  assert.strictEqual(demo.downloadsVerdictFor(499), "Landfill Adjacent");
+  assert.strictEqual(demo.downloadsVerdictFor(500), "Hoarding Situation");
+  assert.strictEqual(demo.downloadsVerdictFor(999), "Hoarding Situation");
+  assert.strictEqual(demo.downloadsVerdictFor(1000), "Superfund Site");
+  assert.strictEqual(demo.computeDownloadsStats(dlFiles(24), DL_NOW).tier, "Tidy Desk");
+  assert.strictEqual(demo.computeDownloadsStats(dlFiles(25), DL_NOW).tier, "Mild Clutter");
+  assert.strictEqual(demo.computeDownloadsStats(dlFiles(100), DL_NOW).tier, "Digital Junk Drawer");
+  assert.strictEqual(demo.computeDownloadsStats(dlFiles(1000), DL_NOW).tier, "Superfund Site");
+  assert.strictEqual(demo.computeDownloadsStats([], DL_NOW).tier, "No Evidence");
+});
+
+check("downloads sentences port the Python voices exactly", () => {
+  assert.strictEqual(demo.downloadsSentenceFor("Digital Junk Drawer", "fair"),
+    "Sentence: probation. The downloads folder gets a check-in once a month.");
+  assert.strictEqual(demo.downloadsSentenceFor("Mild Clutter", "fair"),
+    "Sentence: community service. Delete one installer. Just one. Baby steps.");
+  assert.strictEqual(demo.downloadsSentenceFor("Mild Clutter", "strict"),
+    "Sentence: the installers are deleted today. Not tomorrow. Today.");
+  assert.strictEqual(demo.downloadsSentenceFor("Superfund Site", "strict"),
+    "Sentence: maximum. Every file will be reviewed, named, and justified in writing. All of them.");
+  assert.strictEqual(demo.downloadsSentenceFor("Tidy Desk", "lenient"),
+    "Encouragement: case dismissed, with applause. Download something nice; you have earned the space.");
+  assert.strictEqual(demo.downloadsSentenceFor("Hoarding Situation", "lenient"),
+    "Encouragement: you kept it all because it all mattered at the time. That is not a crime in this court.");
+  assert.strictEqual(demo.downloadsSentenceFor("No Evidence", "fair"), "");
+});
+
+check("downloads byte formatting matches the Python human_bytes", () => {
+  assert.strictEqual(demo.dlHumanBytes(0), "0 B");
+  assert.strictEqual(demo.dlHumanBytes(500), "500 B");
+  assert.strictEqual(demo.dlHumanBytes(1023), "1023 B");
+  assert.strictEqual(demo.dlHumanBytes(1024), "1.0 KB");
+  assert.strictEqual(demo.dlHumanBytes(6431), "6.3 KB");
+  assert.strictEqual(demo.dlHumanBytes(298130000), "284.3 MB");
+  assert.strictEqual(demo.dlHumanBytes(5 * 1024 * 1024 * 1024), "5.0 GB");
+});
+
+check("downloads duplicate grouping: chains and copy suffixes", () => {
+  /* The Python test fixture, byte for byte: a setup chain, a report
+   * "copy" pair, and one unique file. */
+  const base = ts(2026, 5, 1, 12);
+  const files = [
+    { name: "setup.exe", size: 500, mtime: base },
+    { name: "setup (1).exe", size: 500, mtime: base },
+    { name: "setup (2).exe", size: 500, mtime: base },
+    { name: "report.pdf", size: 300, mtime: base },
+    { name: "report copy.pdf", size: 300, mtime: base },
+    { name: "unique.txt", size: 100, mtime: base }
+  ];
+  const s = demo.computeDownloadsStats(files, DL_NOW);
+  assert.strictEqual(s.duplicateGroups, 2);
+  assert.strictEqual(s.duplicateExtra, 3);
+  assert.strictEqual(s.duplicateExtraBytes, 500 * 2 + 300);
+  assert.ok(!dlAwardKeys(s).includes("double_downloader")); /* needs 5 extras */
+
+  /* A chain of four is one group with three extras. */
+  const chain = ["setup.exe", "setup (1).exe", "setup (2).exe", "setup (3).exe"]
+    .map(name => ({ name, size: 700, mtime: base }));
+  const cs = demo.computeDownloadsStats(chain, DL_NOW);
+  assert.strictEqual(cs.duplicateGroups, 1);
+  assert.strictEqual(cs.duplicateExtra, 3);
+  assert.strictEqual(cs.duplicateExtraBytes, 3 * 700);
+
+  /* The group keys themselves, including the " (1) copy" chain and
+   * pathlib's suffix rules. */
+  assert.deepStrictEqual(demo.downloadsGroupKey("setup (2).exe"), { stem: "setup", ext: ".exe" });
+  assert.deepStrictEqual(demo.downloadsGroupKey("setup (1) copy.exe"), { stem: "setup", ext: ".exe" });
+  assert.deepStrictEqual(demo.downloadsGroupKey("setup copy 2.exe"), { stem: "setup", ext: ".exe" });
+  assert.deepStrictEqual(demo.downloadsGroupKey("archive.tar.gz"), { stem: "archive.tar", ext: ".gz" });
+  assert.deepStrictEqual(demo.downloadsGroupKey(".gitignore"), { stem: ".gitignore", ext: "" });
+});
+
+check("downloads awards: installer archaeologist and zip hoarder thresholds", () => {
+  const ten = dlFiles(10, { size: 100 }).map((f, i) =>
+    Object.assign(f, { name: "tool-" + i + ".exe" }));
+  const s10 = demo.computeDownloadsStats(ten, DL_NOW);
+  assert.ok(dlAwardKeys(s10).includes("installer_archaeologist"));
+  assert.strictEqual(s10.awards[0].detail,
+    "10 installers (1000 B) kept after their work was done. The court has excavated older civilizations with fewer setup files.");
+  const nine = dlFiles(9, { size: 100 }).map((f, i) =>
+    Object.assign(f, { name: "tool-" + i + ".exe" }));
+  assert.ok(!dlAwardKeys(demo.computeDownloadsStats(nine, DL_NOW))
+    .includes("installer_archaeologist"));
+
+  const zips = n => dlFiles(n).map((f, i) =>
+    Object.assign(f, { name: "pack-" + i + ".zip" }));
+  assert.ok(dlAwardKeys(demo.computeDownloadsStats(zips(15), DL_NOW)).includes("zip_hoarder"));
+  assert.ok(!dlAwardKeys(demo.computeDownloadsStats(zips(14), DL_NOW)).includes("zip_hoarder"));
+});
+
+check("downloads awards: double downloader at five extra copies", () => {
+  const files = [];
+  ["a", "b", "c"].forEach(stem => {
+    files.push({ name: stem + ".exe", size: 100, mtime: ts(2026, 5, 1, 12) });
+    files.push({ name: stem + " (1).exe", size: 100, mtime: ts(2026, 5, 1, 12) });
+    files.push({ name: stem + " (2).exe", size: 100, mtime: ts(2026, 5, 1, 12) });
+  });
+  const s = demo.computeDownloadsStats(files, DL_NOW);
+  assert.strictEqual(s.duplicateExtra, 6);
+  const award = s.awards.find(a => a.key === "double_downloader");
+  assert.ok(award);
+  assert.strictEqual(award.detail,
+    "6 extra copies of files the defendant already had, in 3 duplicate sets. Downloaded twice, trusted once.");
+});
+
+check("downloads awards: ancient relic, landfill, seeding, receipts, time capsule", () => {
+  const relic = demo.computeDownloadsStats(
+    [{ name: "ancient-driver.exe", size: 100, mtime: ts(2021, 5, 1, 9) }], DL_NOW);
+  assert.strictEqual(relic.oldestAgeYears, 5);
+  const relicAward = relic.awards.find(a => a.key === "ancient_relic");
+  assert.ok(relicAward);
+  assert.strictEqual(relicAward.detail,
+    "ancient-driver.exe dates to Jun 1, 2021, over three years ago, and it is still here.");
+
+  const landfill = demo.computeDownloadsStats(
+    [{ name: "huge.iso", size: 5 * 1024 * 1024 * 1024, mtime: ts(2026, 5, 1, 12) }], DL_NOW);
+  const lfAward = landfill.awards.find(a => a.key === "gigabyte_landfill");
+  assert.ok(lfAward);
+  assert.strictEqual(lfAward.detail,
+    "The downloads alone total 5.0 GB. The landfill has its own weather now.");
+
+  const mixed = demo.computeDownloadsStats([
+    { name: "linux.torrent", size: 100, mtime: ts(2026, 5, 1, 12) },
+    { name: "invoice-march.pdf", size: 100, mtime: ts(2026, 5, 1, 12) },
+    { name: "plain.txt", size: 100, mtime: ts(2026, 5, 1, 12) }
+  ], DL_NOW);
+  const seedAward = mixed.awards.find(a => a.key === "still_seeding");
+  assert.strictEqual(seedAward.detail,
+    "1 torrent file on disk. The court does not ask what they point to. It never asks.");
+  const receiptAward = mixed.awards.find(a => a.key === "receipt_keeper_dx");
+  assert.strictEqual(receiptAward.detail,
+    "1 file with invoice or receipt in the name. The tax folder sends its regards.");
+
+  /* Time Capsule: 6 of 10 files over a year old is exactly 60%. */
+  const capsuleFiles = [];
+  for (let i = 0; i < 6; i++) capsuleFiles.push(dlFile({ mtime: ts(2024, 0, 15, 12) }));
+  for (let i = 0; i < 4; i++) capsuleFiles.push(dlFile({ mtime: ts(2026, 5, 1, 12) }));
+  const capsule = demo.computeDownloadsStats(capsuleFiles, DL_NOW);
+  assert.strictEqual(capsule.oldShare, 60);
+  const tcAward = capsule.awards.find(a => a.key === "time_capsule");
+  assert.ok(tcAward);
+  assert.strictEqual(tcAward.detail,
+    "60.0% of these files are over a year old. This is less a folder than a stratum.");
+  const fiveOld = capsuleFiles.slice(1); /* 5 of 9 old: 55.6% */
+  assert.ok(!dlAwardKeys(demo.computeDownloadsStats(fiveOld, DL_NOW)).includes("time_capsule"));
+
+  /* A clean desk earns nothing. */
+  assert.deepStrictEqual(demo.computeDownloadsStats(dlFiles(5), DL_NOW).awards, []);
+});
+
+check("downloads commentary: priority and the mercy bands", () => {
+  /* Qualifies for both duplicates (6 extras) and installers (12):
+   * the duplicates template wins, as in Python. */
+  const files = [];
+  for (let i = 0; i < 12; i++) {
+    files.push({ name: "tool-" + i + ".exe", size: 100, mtime: ts(2026, 5, 1, 12) });
+  }
+  ["a", "b", "c"].forEach(stem => {
+    files.push({ name: stem + ".dat", size: 100, mtime: ts(2026, 5, 1, 12) });
+    files.push({ name: stem + " (1).dat", size: 100, mtime: ts(2026, 5, 1, 12) });
+    files.push({ name: stem + " (2).dat", size: 100, mtime: ts(2026, 5, 1, 12) });
+  });
+  const s = demo.computeDownloadsStats(files, DL_NOW);
+  assert.strictEqual(s.duplicateExtra, 6);
+  assert.strictEqual(demo.downloadsCommentary(s, 4),
+    "6 duplicate downloads. The court has now reviewed the same installer multiple times, and it was not that compelling the first time.");
+  assert.strictEqual(demo.downloadsCommentary(s, 0),
+    "The court found 6 files that were downloaded more than once, and chooses to believe the defendant simply wanted to be very sure.");
+
+  /* Installers alone: gentle and full roast differ, numbers real. */
+  const instOnly = demo.computeDownloadsStats(
+    dlFiles(12, { size: 100 }).map((f, i) => Object.assign(f, { name: "tool-" + i + ".exe" })), DL_NOW);
+  assert.strictEqual(demo.downloadsCommentary(instOnly, 0),
+    "The court counts 12 installers and sees a well-equipped machine. Every one of them set something up once.");
+  assert.strictEqual(demo.downloadsCommentary(instOnly, 4),
+    "12 installers. The defendant has kept every key to every door ever opened on this machine, including the doors that were demolished.");
+  assert.notStrictEqual(demo.downloadsCommentary(instOnly, 0),
+    demo.downloadsCommentary(instOnly, 4));
+
+  /* No Evidence: the same gentle line as the screenshots court. */
+  assert.strictEqual(demo.downloadsCommentary(demo.computeDownloadsStats([], DL_NOW), 4),
+    "No evidence, no commentary. The court does not roast an empty folder.");
+});
+
+check("downloads sample defendant: 120 files, Digital Junk Drawer, exact awards", () => {
+  const files = demo.makeSampleDownloadsFiles(DL_NOW);
+  assert.strictEqual(files.length, 120);
+  files.forEach(f => {
+    assert.strictEqual(typeof f.name, "string");
+    assert.strictEqual(typeof f.size, "number");
+    assert.strictEqual(typeof f.mtime, "number");
+  });
+  /* Same seed, same folder, byte for byte at a fixed clock. */
+  assert.deepStrictEqual(demo.makeSampleDownloadsFiles(DL_NOW), files);
+  /* One file from 2021. */
+  assert.ok(files.some(f => f.name === "ancient-driver.exe" &&
+    new Date(f.mtime).getFullYear() === 2021));
+  const s = demo.computeDownloadsStats(files, DL_NOW);
+  assert.strictEqual(s.tier, "Digital Junk Drawer");
+  assert.strictEqual(s.installerCount, 17);
+  assert.strictEqual(s.archiveCount, 16);
+  assert.strictEqual(s.duplicateGroups, 2);
+  assert.strictEqual(s.duplicateExtra, 5);
+  assert.strictEqual(s.oldestName, "ancient-driver.exe");
+  assert.deepStrictEqual(dlAwardKeys(s),
+    ["installer_archaeologist", "zip_hoarder", "double_downloader", "ancient_relic"]);
+  const post = demo.downloadsPostText(s);
+  assert.ok(post.startsWith("My Downloads folder just got judged by Snap Judgment: " +
+    "120 files, verdict Digital Junk Drawer, "));
+  assert.ok(post.includes("It reads names, sizes, and dates only, and never opens a file."));
+  /* The verdict text dispatcher routes downloads stats correctly. */
+  assert.strictEqual(demo.verdictPostText(s), post);
+});
+
+check("downloads scan keeps only top-level files", () => {
+  assert.strictEqual(demo.isTopLevelPath("Downloads/report.pdf"), true);
+  assert.strictEqual(demo.isTopLevelPath("Downloads/nested/report.pdf"), false);
+  assert.strictEqual(demo.isTopLevelPath("Downloads/a/b/c.zip"), false);
+  assert.strictEqual(demo.isTopLevelPath("report.pdf"), true);
+  assert.strictEqual(demo.isTopLevelPath(""), true);
+});
+
 console.log("\n" + passed + " test groups passed.");
