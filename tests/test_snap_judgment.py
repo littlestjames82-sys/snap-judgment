@@ -1819,14 +1819,20 @@ class HtmlReportTests(TempDirCase):
         self.assertIn("case dismissed", text)
 
     def test_html_report_escapes_filenames(self):
-        write_file(self.root, "screenshot_<b>.png", make_png(10, 10),
+        # "<" and ">" cannot exist in a Windows filename, so on Windows the
+        # fixture uses "&" (legal there, still HTML-escaped) instead.
+        if os.name == "nt":
+            raw, escaped = "screenshot_&_co.png", "screenshot_&amp;_co.png"
+        else:
+            raw, escaped = "screenshot_<b>.png", "screenshot_&lt;b&gt;.png"
+        write_file(self.root, raw, make_png(10, 10),
                    datetime(2026, 6, 1, 12, 0))
         page = self.root / "report.html"
         code, _, _ = self.run_main([str(self.root), "--html", str(page)])
         self.assertEqual(code, 0)
         text = page.read_text(encoding="utf-8")
-        self.assertIn("screenshot_&lt;b&gt;.png", text)
-        self.assertNotIn("screenshot_<b>.png", text)
+        self.assertIn(escaped, text)
+        self.assertNotIn(raw, text)
 
 
 # ---------------------------------------------------------------------------
