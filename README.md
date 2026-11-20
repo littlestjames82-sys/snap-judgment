@@ -15,20 +15,49 @@ Pure Python standard library. No dependencies, Python 3.9+.
 ```
 snapjudgment ~/Pictures/Screenshots
 snapjudgment ~/Desktop ~/Pictures --card card.html --out report.md
-snapjudgment ~/Downloads --all          # judge every image in the folder
-snapjudgment ~/Pictures --since 2024    # only screenshots from 2024 onward
-snapjudgment ~/Pictures --json          # machine-readable verdict
+snapjudgment ~/Pictures --svg card.svg   # SVG share card (1200x630)
+snapjudgment ~/Downloads --all           # judge every image in the folder
+snapjudgment ~/Pictures --since 2024     # only screenshots from 2024 onward
+snapjudgment ~/Pictures --year 2026      # judge one single year only
+snapjudgment ~/Pictures --vs ~/Phone     # co-defendant mode: compare two folders
+snapjudgment ~/Pictures --judge strict   # strict | fair | lenient presiding judge
+snapjudgment ~/Pictures --csv files.csv  # per-file records as CSV
+snapjudgment --history                   # print the court record of prior hearings
+snapjudgment ~/Pictures --json           # machine-readable verdict
 ```
 
 With no folder argument, Snap Judgment checks the usual places
-(`~/Pictures/Screenshots`, `~/Desktop`, `~/Pictures`, `~/Downloads`) and
-judges the first one that actually contains screenshots.
+(`~/Pictures/Screenshots`, `~/OneDrive/Pictures/Screenshots`, `~/Desktop`,
+`~/Pictures`, `~/Downloads`) and judges the first one that actually
+contains screenshots.
 
 The verdict tiers run from **Innocent Bystander** (under 50 screenshots) up
 to **Unrepentant Screenshot Felon** (2,500+). Along the way the court weighs
-the evidence: total count and size, date span, busiest day and hour, night
-share, longest daily streak, biggest 60-second burst, duplicate suspects,
-and the device eras told by your screen resolutions.
+the evidence: total count and size, the largest single screenshot, date
+span, busiest day, month and hour, night share, weekend share, evidence
+retention (how much of the collection is over a year old), screenshots per
+day, longest daily streak, longest clean stretch, biggest 60-second burst,
+duplicate suspects and the storage they waste, and the device eras told by
+your screen resolutions. Files the court cannot read (broken symlinks,
+locked files) are counted and reported, never fatal.
+
+With 10 or more screenshots the court also reads **the charges**: a census
+of where the screenshots came from, from metadata hints only. Android
+filenames that carry an app package are credited to that app (WhatsApp,
+Telegram, Instagram, and friends); everything else is classified by the
+form factor its dimensions suggest, from Phone (tall) to Desktop /
+landscape.
+
+Three judges can preside. The **fair** judge is the default. The **strict**
+judge (The Hanging Judge) words the same verdict severely, and the
+**lenient** judge (The Sympathetic Judge) frames everything kindly, with
+encouragement instead of a sentence. The voice changes the wording only,
+never the math.
+
+Every hearing is entered into the **court record** at
+`~/.snap-judgment/history.jsonl`. The next time a folder is judged, the
+verdict reports the last hearing's count and whether the collection is up
+or down since. `snapjudgment --history` prints the full record.
 
 ## The verdicts
 
@@ -49,8 +78,10 @@ and the device eras told by your screen resolutions.
 - **The Archivist** - your oldest screenshot is at least 3 years old
 - **Receipt Keeper** - half or more of your shots are weekday 9-to-5 evidence
 - **Repeat Customer** - 10 or more files are exact size-and-dimension duplicates of a sibling
+- **Gigabyte Club** - your screenshots total a gigabyte or more of evidence
 - **Time Traveler** - the collection spans 4 or more years
 - **Screenshot Streak** - 7 or more consecutive days with at least one screenshot
+- **Clean Stretch** - 30 or more consecutive days without a single screenshot; a recorded moment of restraint
 - **Minimalist** - under 50 screenshots total; the court's rare acquittal
 
 ## Sample output
@@ -61,11 +92,15 @@ full report and a sample share card):
 ```
 THE VERDICT
   Repeat Offender
-  310 screenshots, 12.9 MB of evidence,
+  310 screenshots, 15.1 MB of evidence,
   spanning Jan 5, 2024 to Nov 10, 2026.
 
+THE CHARGES
+  Desktop / landscape            157 (50.6%)
+  Phone (tall)                   153 (49.4%)
+
 AWARDS
-  * Night Owl - 87 screenshots between 10 PM and 5 AM (28.1% of the total).
+  * Night Owl - 91 screenshots between 10 PM and 5 AM (29.4% of the total).
   * Burst Mode - 12 screenshots inside a single 60-second window.
   * Repeat Customer - 12 files share an exact size and dimensions with a sibling. The same screenshot, taken again.
   * Screenshot Streak - 10 consecutive days with at least one screenshot.
