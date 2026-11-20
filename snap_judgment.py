@@ -30,14 +30,17 @@ import html
 import json
 import os
 import re
+import statistics
+import struct
 import sys
+import zlib
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from xml.sax.saxutils import escape as _xml_escape
 
-__version__ = "0.3.0"
+__version__ = "0.5.0"
 
 # ---------------------------------------------------------------------------
 # detection
@@ -284,6 +287,19 @@ def default_candidates() -> list[Path]:
 # statistics
 # ---------------------------------------------------------------------------
 
+_SEASONS = {
+    12: "Winter (Dec-Feb)", 1: "Winter (Dec-Feb)", 2: "Winter (Dec-Feb)",
+    3: "Spring (Mar-May)", 4: "Spring (Mar-May)", 5: "Spring (Mar-May)",
+    6: "Summer (Jun-Aug)", 7: "Summer (Jun-Aug)", 8: "Summer (Jun-Aug)",
+    9: "Autumn (Sep-Nov)", 10: "Autumn (Sep-Nov)", 11: "Autumn (Sep-Nov)",
+}
+
+
+def _season_for_month(month: int) -> str:
+    """Meteorological season name for a calendar month."""
+    return _SEASONS[month]
+
+
 def human_bytes(n: int) -> str:
     value = float(n)
     for unit in ("B", "KB", "MB", "GB", "TB"):
@@ -491,6 +507,62 @@ def analyze(shots: list[Shot], recordings: list[Shot]) -> dict:
     per_day = round(count / ((last_date - first_date).days + 1), 1)
     largest = max(shots, key=lambda s: s.size)
 
+    # exhibits: the five oldest screenshots; timestamp ties are broken by
+    # filename so the order is deterministic
+    exhibits = [
+        {"name": s.name, "date": s.dt.date()}
+        for s in sorted(shots, key=lambda s: (s.mtime, s.name))[:5]
+    ]
+
+    # formats: per-extension counts over the screenshots
+    formats = dict(sorted(
+        Counter(Path(s.path).suffix.lower().lstrip(".") for s in shots).items()
+    ))
+
+    # screenshot season: the meteorological season holding the most shots
+    season_counts = Counter(_season_for_month(s.dt.month) for s in shots)
+    season_name, season_total = sorted(
+        season_counts.items(), key=lambda kv: (-kv[1], kv[0])
+    )[0]
+    season = {
+        "name": season_name,
+        "share": round(100.0 * season_total / count, 1) if count else 0.0,
+    }
+
+    three_am_count = sum(1 for s in shots if s.dt.hour in (2, 3))
+
+    # silent months: whole calendar months inside the span with no shots
+    months_present = {(s.dt.year, s.dt.month) for s in shots}
+    silent_months = 0
+    cursor_year, cursor_month = first_date.year, first_date.month
+    while (cursor_year, cursor_month) <= (last_date.year, last_date.month):
+        if (cursor_year, cursor_month) not in months_present:
+            silent_months += 1
+        cursor_month += 1
+        if cursor_month == 13:
+            cursor_year, cursor_month = cursor_year + 1, 1
+
+    median_per_active_day = round(
+        float(statistics.median(day_counts.values())), 1
+    )
+
+    # screenshot anniversary: the month-day with the most screenshots
+    # summed across all years, once it has at least five to its name
+    monthday_counts = Counter((s.dt.month, s.dt.day) for s in shots)
+    (anniv_month, anniv_day), anniv_count = sorted(
+        monthday_counts.items(), key=lambda kv: (-kv[1], kv[0])
+    )[0]
+    anniversary = None
+    if anniv_count >= 5:
+        anniversary = {
+            "month_day": f"{date(2000, anniv_month, anniv_day):%b} {anniv_day}",
+            "count": anniv_count,
+            "years": len({
+                s.dt.year for s in shots
+                if (s.dt.month, s.dt.day) == (anniv_month, anniv_day)
+            }),
+        }
+
     oldest = shots[0]
     return {
         "count": count,
@@ -532,6 +604,13 @@ def analyze(shots: list[Shot], recordings: list[Shot]) -> dict:
         "largest_size": largest.size,
         "largest_human": human_bytes(largest.size),
         "device_eras": device_eras,
+        "exhibits": exhibits,
+        "formats": formats,
+        "season": season,
+        "three_am_count": three_am_count,
+        "silent_months": silent_months,
+        "median_per_active_day": median_per_active_day,
+        "anniversary": anniversary,
         "skipped": 0,
     }
 
@@ -554,6 +633,30 @@ TIERS = [
     (1, "Innocent Bystander",
      "Sentence: case dismissed. Go take a screenshot of this verdict."),
 ]
+
+
+TIER_ORDER = [
+    "Innocent Bystander",
+    "Petty Offender",
+    "Repeat Offender",
+    "Habitual Hoarder",
+    "Felony-Level Archivist",
+    "Unrepentant Screenshot Felon",
+]
+
+
+def _normalize_tier_name(name: str) -> str:
+    """Tier names compare loosely: case, spaces and hyphens are flexible."""
+    return re.sub(r"[\s\-]+", " ", name.strip().lower())
+
+
+TIER_RANKS = {
+    _normalize_tier_name(tier): rank for rank, tier in enumerate(TIER_ORDER)
+}
+
+
+def tier_rank(tier: str) -> int:
+    return TIER_RANKS[_normalize_tier_name(tier)]
 
 
 def verdict_for(count: int, voice: str = "fair"):
@@ -639,6 +742,77 @@ AWARD_FRAMING = {
     ),
 }
 
+CUSTOM_VOICE_KEY = "custom"
+
+
+def load_judge_pack(path) -> dict:
+    """Load and validate a custom judge pack (JSON). Raises SnapError
+    with a plain message on any problem.
+
+    Format: {"name": str, "intro": str (may use {tier} and {count}),
+    "sentences": {tier name: sentence}, "award_lead": str}. Every field
+    except "name" is optional; tiers missing from "sentences" fall back
+    to the fair judge's sentence for that tier.
+    """
+    if not path.is_file():
+        raise SnapError(f"judge file not found: {path}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise SnapError(f"judge file is not valid JSON: {path}")
+    if not isinstance(data, dict):
+        raise SnapError("judge file must be a JSON object")
+    name = data.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise SnapError('judge file needs a non-empty "name" string')
+    intro = data.get("intro", "")
+    if not isinstance(intro, str):
+        raise SnapError('judge file "intro" must be a string')
+    sentences = data.get("sentences", {})
+    if not isinstance(sentences, dict) or not all(
+        isinstance(k, str) and isinstance(v, str)
+        for k, v in sentences.items()
+    ):
+        raise SnapError(
+            'judge file "sentences" must map tier names to sentences'
+        )
+    award_lead = data.get("award_lead", "")
+    if not isinstance(award_lead, str):
+        raise SnapError('judge file "award_lead" must be a string')
+    return {
+        "name": name,
+        "intro": intro,
+        "sentences": sentences,
+        "award_lead": award_lead,
+    }
+
+
+def register_judge_pack(pack: dict) -> str:
+    """Install a loaded pack as the custom voice. Returns its voice key."""
+    key = CUSTOM_VOICE_KEY
+    JUDGE_NAMES[key] = pack["name"]
+    VOICE_SENTENCES[key] = dict(pack["sentences"])
+    if pack["intro"]:
+        JUDGE_INTROS[key] = pack["intro"]
+    else:
+        JUDGE_INTROS.pop(key, None)
+    if pack["award_lead"]:
+        AWARD_FRAMING[key] = (
+            pack["award_lead"],
+            "None. The court is as surprised as you are.",
+        )
+    else:
+        AWARD_FRAMING.pop(key, None)
+    return key
+
+
+def _format_intro(intro: str, tier: str, count: int) -> str:
+    """Fill {tier} and {count} placeholders in a judge's intro line."""
+    try:
+        return intro.format(tier=tier, count=f"{count:,}")
+    except (IndexError, KeyError, ValueError):
+        return intro
+
 
 def compute_awards(stats: dict, now: datetime | None = None) -> list[dict]:
     now = now or datetime.now()
@@ -649,6 +823,12 @@ def compute_awards(stats: dict, now: datetime | None = None) -> list[dict]:
             "name": "Night Owl",
             "evidence": f"{stats['night_count']} screenshots between 10 PM and 5 AM "
                         f"({stats['night_share']:.1f}% of the total).",
+        })
+    if stats["three_am_count"] >= 10:
+        awards.append({
+            "name": "The 3 AM Club",
+            "evidence": f"{stats['three_am_count']} screenshots taken between "
+                        f"2 AM and 4 AM, when nothing on screen can be urgent.",
         })
     if stats["burst_record"] >= 8:
         awards.append({
@@ -673,6 +853,15 @@ def compute_awards(stats: dict, now: datetime | None = None) -> list[dict]:
             "evidence": f"{stats['duplicate_files']} files share an exact size and dimensions "
                         f"with a sibling. The same screenshot, taken again.",
         })
+    habit_share = (
+        round(100.0 * stats["busiest_hour_count"] / count, 1) if count else 0.0
+    )
+    if habit_share >= 25:
+        awards.append({
+            "name": "Creature of Habit",
+            "evidence": f"{habit_share:.1f}% of all screenshots were taken in the "
+                        f"{_fmt_hour(stats['busiest_hour'])} hour. Same time, same impulse.",
+        })
     if stats["total_bytes"] >= 1024 ** 3:
         awards.append({
             "name": "Gigabyte Club",
@@ -683,6 +872,20 @@ def compute_awards(stats: dict, now: datetime | None = None) -> list[dict]:
         awards.append({
             "name": "Time Traveler",
             "evidence": f"The collection spans {stats['span_days'] / 365.25:.1f} years of screenshots.",
+        })
+    if stats["span_days"] >= 8 * 365:
+        awards.append({
+            "name": "Lifer",
+            "evidence": f"The collection spans {stats['span_days'] / 365.25:.1f} years. "
+                        f"The screenshots have seniority now.",
+        })
+    if stats["anniversary"] is not None and stats["anniversary"]["count"] >= 15:
+        anniv = stats["anniversary"]
+        awards.append({
+            "name": "Anniversary",
+            "evidence": f"{anniv['count']} screenshots fall on {anniv['month_day']}, "
+                        f"gathered across {anniv['years']} different years. "
+                        f"Some dates just attract evidence.",
         })
     if stats["longest_streak"] >= 7:
         awards.append({
@@ -743,6 +946,8 @@ def _evidence_lines(stats: dict) -> list[tuple[str, str]]:
         ("Evidence retention", f"{stats['retention_old_count']} over a year old "
                                f"({stats['retention_old_share']:.1f}%)"),
         ("Screenshots per day", f"{stats['per_day']:.1f}"),
+        ("Median per active day", f"{stats['median_per_active_day']:.1f}"),
+        ("Silent months", f"{stats['silent_months']}"),
         ("Longest daily streak", f"{stats['longest_streak']} days"),
     ]
     if stats["longest_gap_days"] >= 2:
@@ -761,6 +966,26 @@ def _evidence_lines(stats: dict) -> list[tuple[str, str]]:
         lines.append(
             ("Duplicate waste", human_bytes(stats["duplicate_bytes_wasted"]))
         )
+    top_formats = sorted(
+        stats["formats"].items(), key=lambda kv: (-kv[1], kv[0])
+    )[:3]
+    lines.append(
+        ("Formats", ", ".join(
+            f"{ext.upper()} {100.0 * n / stats['count']:.0f}%"
+            for ext, n in top_formats
+        ))
+    )
+    lines.append(
+        ("Screenshot season",
+         f"{stats['season']['name']} - {stats['season']['share']:.1f}%")
+    )
+    if stats["anniversary"] is not None:
+        anniv = stats["anniversary"]
+        lines.append(
+            ("Screenshot anniversary",
+             f"{anniv['month_day']} - {anniv['count']} screenshots "
+             f"across {anniv['years']} years")
+        )
     lines += [
         ("Screen recordings", f"{stats['recordings']}"),
         ("Device eras", f"{len(stats['device_eras'])}"),
@@ -772,7 +997,8 @@ def _evidence_lines(stats: dict) -> list[tuple[str, str]]:
 
 def render_report(stats: dict, tier: str, sentence: str, awards: list[dict],
                   year: int | None = None, voice: str = "fair",
-                  court_record: str | None = None) -> str:
+                  court_record: str | None = None,
+                  folders: list[dict] | None = None) -> str:
     out = [
         "=" * 62,
         "SNAP JUDGMENT - The Court of Screenshot Affairs",
@@ -786,7 +1012,7 @@ def render_report(stats: dict, tier: str, sentence: str, awards: list[dict],
     ]
     intro = JUDGE_INTROS.get(voice)
     if intro:
-        out.append(f"  {intro}")
+        out.append(f"  {_format_intro(intro, tier, stats['count'])}")
     out += [
         f"  {tier}",
         f"  {stats['count']:,} screenshots, {stats['total_human']} of evidence,",
@@ -810,11 +1036,24 @@ def render_report(stats: dict, tier: str, sentence: str, awards: list[dict],
         )
     per_year = ", ".join(f"{y}: {n}" for y, n in stats["per_year"].items())
     out.append(f"  {'Screenshots per year':<30} {per_year}")
+    if folders and len(folders) > 1:
+        out += ["", "FOLDERS JUDGED"]
+        for entry in folders:
+            out.append(
+                f"  {entry['path']} - {entry['count']:,} screenshots"
+            )
     if stats["count"] >= 10 and stats["sources"]:
         out += ["", "THE CHARGES"]
         for source in stats["sources"]:
             out.append(
                 f"  {source['name']:<30} {source['count']} ({source['share']:.1f}%)"
+            )
+    if stats["count"] >= 5 and stats["exhibits"]:
+        out += ["", "EXHIBITS"]
+        for letter, exhibit in zip("ABCDE", stats["exhibits"]):
+            out.append(
+                f"  Exhibit {letter} - {exhibit['name']} "
+                f"({_fmt_date(exhibit['date'])})"
             )
     out += ["", "AWARDS"]
     framing = AWARD_FRAMING.get(voice)
@@ -885,9 +1124,146 @@ def render_comparison(main_stats: dict, main_tier: str, versus: dict) -> str:
     return "\n".join(out)
 
 
+def _year_change_closing(earlier_year: int, earlier_stats: dict,
+                         later_year: int, later_stats: dict):
+    """(closing line, signed % change) for later year measured on earlier."""
+    earlier, later = earlier_stats["count"], later_stats["count"]
+    change = round(100.0 * (later - earlier) / earlier, 1) if earlier else 0.0
+    if later < earlier:
+        line = (f"The court notes improvement: {later_year} is down "
+                f"{abs(change):.0f}% on {earlier_year}.")
+    elif later > earlier:
+        line = (f"The court notes a relapse: {later_year} is up "
+                f"{change:.0f}% on {earlier_year}.")
+    else:
+        line = (f"The court notes no change in behavior: {later_year} "
+                f"matches {earlier_year}, screenshot for screenshot.")
+    return line, change
+
+
+def build_vs_year(shots: list[Shot], recordings: list[Shot],
+                  target_year: int, voice: str = "fair") -> dict:
+    """Compare one year's screenshots against the most recent other year
+    present in the same collection (or the previous year, when the target
+    IS the most recent). Raises SnapError when the comparison is impossible."""
+    years_present = sorted({s.dt.year for s in shots})
+    if len(years_present) < 2:
+        raise SnapError(
+            "--vs-year needs screenshots from at least two different years"
+        )
+    if target_year not in years_present:
+        raise SnapError(
+            f"no screenshots from {target_year} in the judged folders"
+        )
+    if target_year == years_present[-1]:
+        other_year = years_present[-2]
+    else:
+        other_year = years_present[-1]
+
+    def scope(y: int) -> dict:
+        year_shots = [s for s in shots if s.dt.year == y]
+        year_recordings = [r for r in recordings if r.dt.year == y]
+        year_stats = analyze(year_shots, year_recordings)
+        year_tier, year_sentence = verdict_for(
+            year_stats["count"], voice=voice
+        )
+        return {
+            "stats": year_stats,
+            "tier": year_tier,
+            "sentence": year_sentence,
+            "awards": compute_awards(year_stats),
+        }
+
+    target = scope(target_year)
+    other = scope(other_year)
+    if target_year < other_year:
+        closing, change_pct = _year_change_closing(
+            target_year, target["stats"], other_year, other["stats"]
+        )
+    else:
+        closing, change_pct = _year_change_closing(
+            other_year, other["stats"], target_year, target["stats"]
+        )
+    return {
+        "target_year": target_year,
+        "other_year": other_year,
+        "target": target,
+        "other": other,
+        "change_pct": change_pct,
+        "closing": closing,
+    }
+
+
+def render_year_comparison(vs_year: dict) -> str:
+    target, other = vs_year["target"], vs_year["other"]
+    out = [
+        "YEAR COMPARISON",
+        f"  {'':<22} {str(vs_year['target_year']):<30} {vs_year['other_year']}",
+    ]
+    for label, target_value, other_value in _comparison_rows(
+        target["stats"], target["tier"], other["stats"], other["tier"]
+    ):
+        out.append(f"  {label:<22} {target_value:<30} {other_value}")
+    out += [
+        "",
+        f"  {vs_year['closing']}",
+        "",
+    ]
+    return "\n".join(out)
+
+
+REPO_URL = "https://github.com/littlestjames82-sys/snap-judgment"
+
+
+def build_wrapped_posts(stats: dict, tier: str, awards: list[dict],
+                        year: int) -> str:
+    """The post.txt for a Wrapped kit: a SHORT post (<=280 chars) and a
+    STANDARD post, built only from this review's own numbers."""
+    short = (
+        f"My {year} in screenshots, judged by Snap Judgment: "
+        f"{stats['count']:,} screenshots, verdict {tier}, "
+        f"{stats['night_share']:.0f}% taken after 10 PM, "
+        f"longest streak {stats['longest_streak']} days. "
+        f"It reads metadata only, never the pictures. {REPO_URL}"
+    )
+    if len(short) > 280:  # very large numbers: fall back to a tighter draft
+        short = (
+            f"My {year} in screenshots, judged by Snap Judgment: "
+            f"{stats['count']:,} screenshots, verdict {tier}. "
+            f"It reads metadata only, never the pictures. {REPO_URL}"
+        )
+    if awards:
+        awards_line = "Top awards: " + ", ".join(
+            a["name"] for a in awards[:2]
+        )
+    else:
+        awards_line = "Awards: none. The court is as surprised as you are."
+    standard = "\n".join([
+        f"My {year} in screenshots, judged by Snap Judgment.",
+        "",
+        f"Verdict: {tier}",
+        f"{stats['count']:,} screenshots, {stats['total_human']} of evidence.",
+        awards_line,
+        "",
+        "Snap Judgment reads file metadata only. "
+        "It never looks at the pictures.",
+        REPO_URL,
+    ])
+    return "\n".join([
+        "SHORT POST",
+        short,
+        "",
+        "STANDARD POST",
+        standard,
+        "",
+    ])
+
+
 def render_markdown(stats: dict, tier: str, sentence: str, awards: list[dict],
                     year: int | None = None, voice: str = "fair",
-                    versus: dict | None = None) -> str:
+                    versus: dict | None = None,
+                    folders: list[dict] | None = None,
+                    vs_year: dict | None = None) -> str:
     out = [
         "# Snap Judgment",
         "",
@@ -898,7 +1274,7 @@ def render_markdown(stats: dict, tier: str, sentence: str, awards: list[dict],
     ]
     intro = JUDGE_INTROS.get(voice)
     if intro:
-        out.append(intro)
+        out.append(_format_intro(intro, tier, stats["count"]))
     if year is not None:
         out.append(f"Scope: year {year}")
     out += [
@@ -914,13 +1290,30 @@ def render_markdown(stats: dict, tier: str, sentence: str, awards: list[dict],
             f"- **Device era:** {w}x{h} - {era['count']} shots, "
             f"{_fmt_date(era['first'])} to {_fmt_date(era['last'])}"
         )
-    per_year = ", ".join(f"{y}: {n}" for y, n in stats["per_year"].items())
-    out.append(f"- **Screenshots per year:** {per_year}")
+    out.append("- **Screenshots per year:**")
+    if stats["per_year"]:
+        biggest_year = max(stats["per_year"].values())
+        for y, n in stats["per_year"].items():
+            bar = "█" * max(1, round(20 * n / biggest_year)) if n else ""
+            out.append(f"  - {y}: {n} {bar}")
+    if folders and len(folders) > 1:
+        out += ["", "## Folders Judged", ""]
+        for entry in folders:
+            out.append(
+                f"- **{entry['path']}:** {entry['count']:,} screenshots"
+            )
     if stats["count"] >= 10 and stats["sources"]:
         out += ["", "## The Charges", ""]
         for source in stats["sources"]:
             out.append(
                 f"- **{source['name']}:** {source['count']} ({source['share']:.1f}%)"
+            )
+    if stats["count"] >= 5 and stats["exhibits"]:
+        out += ["", "## Exhibits", ""]
+        for letter, exhibit in zip("ABCDE", stats["exhibits"]):
+            out.append(
+                f"- **Exhibit {letter}** - {exhibit['name']} "
+                f"({_fmt_date(exhibit['date'])})"
             )
     out += ["", "## Awards", ""]
     framing = AWARD_FRAMING.get(voice)
@@ -951,11 +1344,28 @@ def render_markdown(stats: dict, tier: str, sentence: str, awards: list[dict],
             _comparison_closing(stats, vs_stats, versus["worse"]),
             "",
         ]
+    if vs_year is not None:
+        target, other = vs_year["target"], vs_year["other"]
+        out += [
+            "## Year Comparison",
+            "",
+            f"| | {vs_year['target_year']} | {vs_year['other_year']} |",
+            "| --- | --- | --- |",
+        ]
+        for label, target_value, other_value in _comparison_rows(
+            target["stats"], target["tier"], other["stats"], other["tier"]
+        ):
+            out.append(f"| {label} | {target_value} | {other_value} |")
+        out += [
+            "",
+            vs_year["closing"],
+            "",
+        ]
     return "\n".join(out)
 
 
 def build_json(stats: dict, tier: str, sentence: str, awards: list[dict],
-               folders: list[str], year: int | None = None,
+               folders: list[dict], year: int | None = None,
                judge: str = "fair") -> dict:
     return {
         "version": __version__,
@@ -1015,6 +1425,15 @@ def build_json(stats: dict, tier: str, sentence: str, awards: list[dict],
         "duplicate_groups": stats["duplicate_groups"],
         "duplicate_files": stats["duplicate_files"],
         "duplicate_bytes_wasted": stats["duplicate_bytes_wasted"],
+        "exhibits": [
+            {"name": e["name"], "date": e["date"].isoformat()}
+            for e in stats["exhibits"]
+        ],
+        "formats": stats["formats"],
+        "season": stats["season"],
+        "silent_months": stats["silent_months"],
+        "median_per_active_day": stats["median_per_active_day"],
+        "anniversary": stats["anniversary"],
         "skipped": stats.get("skipped", 0),
         "device_eras": [
             {
@@ -1144,6 +1563,348 @@ def render_svg(stats: dict, tier: str, sentence: str, awards: list[dict]) -> str
 """
 
 
+def render_html_report(stats: dict, tier: str, sentence: str,
+                       awards: list[dict], year: int | None = None,
+                       voice: str = "fair") -> str:
+    """A full self-contained HTML report: verdict, evidence table,
+    per-year bars, exhibits, charges, awards, sentence. Inline CSS only."""
+    esc = html.escape
+    rows = "\n".join(
+        f"      <tr><td>{esc(label)}</td><td>{esc(value)}</td></tr>"
+        for label, value in _evidence_lines(stats)
+    )
+    era_rows = "\n".join(
+        f"      <tr><td>Device era</td><td>{era['dims'][0]}x{era['dims'][1]}"
+        f" - {era['count']} shots, {_fmt_date(era['first'])}"
+        f" to {_fmt_date(era['last'])}</td></tr>"
+        for era in stats["device_eras"]
+    )
+    if era_rows:
+        rows += "\n" + era_rows
+    biggest_year = max(stats["per_year"].values()) if stats["per_year"] else 1
+    bars = "\n".join(
+        f'      <div class="bar-row"><span class="bar-year">{y}</span>'
+        f'<div class="bar-track"><div class="bar" '
+        f'style="width:{100.0 * n / biggest_year:.1f}%"></div></div>'
+        f'<span class="bar-count">{n}</span></div>'
+        for y, n in stats["per_year"].items()
+    )
+    sections = []
+    intro = JUDGE_INTROS.get(voice)
+    if intro:
+        sections.append(
+            f'    <p class="intro">{esc(_format_intro(intro, tier, stats["count"]))}</p>'
+        )
+    if year is not None:
+        sections.append(f'    <p class="intro">Scope: year {year}</p>')
+    sections.append(f"""    <h2>The Evidence</h2>
+    <table>
+{rows}
+    </table>
+    <div class="bars">
+{bars}
+    </div>""")
+    if stats["count"] >= 5 and stats["exhibits"]:
+        items = "\n".join(
+            f"        <li><strong>Exhibit {letter}</strong> - "
+            f"{esc(e['name'])} ({_fmt_date(e['date'])})</li>"
+            for letter, e in zip("ABCDE", stats["exhibits"])
+        )
+        sections.append(f"""    <h2>Exhibits</h2>
+    <ul>
+{items}
+    </ul>""")
+    if stats["count"] >= 10 and stats["sources"]:
+        items = "\n".join(
+            f"        <li><strong>{esc(s['name'])}</strong> - {s['count']} "
+            f"({s['share']:.1f}%)</li>"
+            for s in stats["sources"]
+        )
+        sections.append(f"""    <h2>The Charges</h2>
+    <ul>
+{items}
+    </ul>""")
+    if awards:
+        items = "\n".join(
+            f"        <li><strong>{esc(a['name'])}</strong> - "
+            f"{esc(a['evidence'])}</li>"
+            for a in awards
+        )
+    else:
+        items = "        <li>None. The court is as surprised as you are.</li>"
+    sections.append(f"""    <h2>Awards</h2>
+    <ul>
+{items}
+    </ul>""")
+    body = "\n".join(sections)
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Snap Judgment - {esc(tier)}</title>
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ background: #0d0d12; color: #e8e3d8; font-family: Georgia, 'Times New Roman', serif;
+         display: flex; justify-content: center; padding: 40px 16px; }}
+  .report {{ max-width: 720px; width: 100%; background: #16161f; border: 2px solid #b08d3c;
+            border-radius: 10px; padding: 36px 40px; box-shadow: 0 12px 40px rgba(0,0,0,.6); }}
+  .court {{ text-align: center; letter-spacing: 3px; font-size: 12px; color: #b08d3c;
+           text-transform: uppercase; }}
+  h1 {{ text-align: center; font-size: 30px; margin: 10px 0 4px; }}
+  .tier {{ text-align: center; font-size: 24px; color: #d4af5a; margin-bottom: 6px; }}
+  .summary {{ text-align: center; color: #cfc9ba; margin-bottom: 10px; }}
+  .intro {{ text-align: center; font-style: italic; color: #9a94a6; margin-bottom: 8px; }}
+  h2 {{ font-size: 13px; letter-spacing: 2px; color: #b08d3c; text-transform: uppercase;
+       margin: 22px 0 10px; border-top: 1px solid #33333f; padding-top: 16px; }}
+  table {{ width: 100%; border-collapse: collapse; }}
+  td {{ padding: 5px 4px; font-size: 14px; vertical-align: top; }}
+  td:first-child {{ color: #9a94a6; width: 42%; }}
+  .bars {{ margin-top: 12px; }}
+  .bar-row {{ display: flex; align-items: center; gap: 10px; margin: 4px 0; font-size: 13px; }}
+  .bar-year {{ width: 42px; color: #9a94a6; }}
+  .bar-track {{ flex: 1; background: #1e1e2a; border-radius: 4px; height: 12px; }}
+  .bar {{ background: #b08d3c; height: 12px; border-radius: 4px; }}
+  .bar-count {{ width: 48px; text-align: right; }}
+  ul {{ list-style: none; }}
+  li {{ padding: 4px 0; font-size: 14px; }}
+  .sentence {{ font-style: italic; color: #cfc9ba; border-top: 1px solid #33333f;
+              padding-top: 14px; margin-top: 22px; }}
+  .foot {{ text-align: center; font-size: 11px; color: #6d6878; margin-top: 16px; }}
+</style>
+</head>
+<body>
+  <div class="report">
+    <div class="court">The Court of Screenshot Affairs</div>
+    <h1>Snap Judgment</h1>
+    <div class="tier">{esc(tier)}</div>
+    <div class="summary">{stats['count']:,} screenshots, {esc(stats['total_human'])} of evidence,
+      spanning {_fmt_date(stats['first_date'])} to {_fmt_date(stats['last_date'])}.</div>
+{body}
+    <div class="sentence">{esc(sentence)}</div>
+    <div class="foot">Judged from file metadata only. Pixels were never read. Snap Judgment, Ghost Developer Studio.</div>
+  </div>
+</body>
+</html>
+"""
+
+
+def oneline_summary(stats: dict, tier: str) -> str:
+    """Exactly one line: verdict, count, size, span."""
+    span = f"{stats['first_date']:%b %Y} - {stats['last_date']:%b %Y}"
+    return (
+        f"{tier} · {stats['count']:,} screenshots · "
+        f"{stats['total_human']} · {span}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# PNG share card: a minimal bitmap-font renderer, standard library only
+# ---------------------------------------------------------------------------
+
+# A compact 5x7 pixel font. Each glyph is 7 rows of 5 characters;
+# "#" is a lit pixel, "." is dark. Covers A-Z, a-z, 0-9 and basic
+# punctuation. Anything not in the table renders as a space.
+_FONT_5X7 = {
+    "A": (".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"),
+    "B": ("####.", "#...#", "#...#", "####.", "#...#", "#...#", "####."),
+    "C": (".####", "#....", "#....", "#....", "#....", "#....", ".####"),
+    "D": ("####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."),
+    "E": ("#####", "#....", "#....", "####.", "#....", "#....", "#####"),
+    "F": ("#####", "#....", "#....", "####.", "#....", "#....", "#...."),
+    "G": (".####", "#....", "#....", "#.###", "#...#", "#...#", ".###."),
+    "H": ("#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"),
+    "I": ("#####", "..#..", "..#..", "..#..", "..#..", "..#..", "#####"),
+    "J": ("..###", "...#.", "...#.", "...#.", "...#.", "#..#.", ".##.."),
+    "K": ("#...#", "#..#.", "#.#..", "##...", "#.#..", "#..#.", "#...#"),
+    "L": ("#....", "#....", "#....", "#....", "#....", "#....", "#####"),
+    "M": ("#...#", "##.##", "#.#.#", "#.#.#", "#...#", "#...#", "#...#"),
+    "N": ("#...#", "##..#", "#.#.#", "#..##", "#...#", "#...#", "#...#"),
+    "O": (".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."),
+    "P": ("####.", "#...#", "#...#", "####.", "#....", "#....", "#...."),
+    "Q": (".###.", "#...#", "#...#", "#...#", "#.#.#", "#..#.", ".##.#"),
+    "R": ("####.", "#...#", "#...#", "####.", "#.#..", "#..#.", "#...#"),
+    "S": (".####", "#....", "#....", ".###.", "....#", "....#", "####."),
+    "T": ("#####", "..#..", "..#..", "..#..", "..#..", "..#..", "..#.."),
+    "U": ("#...#", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."),
+    "V": ("#...#", "#...#", "#...#", "#...#", "#...#", ".#.#.", "..#.."),
+    "W": ("#...#", "#...#", "#...#", "#.#.#", "#.#.#", "#.#.#", ".#.#."),
+    "X": ("#...#", ".#.#.", "..#..", "..#..", "..#..", ".#.#.", "#...#"),
+    "Y": ("#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#.."),
+    "Z": ("#####", "....#", "...#.", "..#..", ".#...", "#....", "#####"),
+    "a": (".....", ".....", ".####", "....#", ".####", "#...#", ".####"),
+    "b": ("#....", "#....", "####.", "#...#", "#...#", "#...#", "####."),
+    "c": (".....", ".....", ".####", "#....", "#....", "#....", ".####"),
+    "d": ("....#", "....#", ".####", "#...#", "#...#", "#...#", ".####"),
+    "e": (".....", ".....", ".###.", "#...#", "#####", "#....", ".###."),
+    "f": ("..##.", ".#...", "#####", ".#...", ".#...", ".#...", ".#..."),
+    "g": (".....", ".....", ".####", "#...#", ".####", "....#", ".###."),
+    "h": ("#....", "#....", "####.", "#...#", "#...#", "#...#", "#...#"),
+    "i": ("..#..", ".....", ".##..", "..#..", "..#..", "..#..", ".###."),
+    "j": ("...#.", ".....", "..##.", "...#.", "...#.", "#..#.", ".##.."),
+    "k": ("#....", "#....", "#..#.", "#.#..", "##...", "#.#..", "#..#."),
+    "l": (".##..", "..#..", "..#..", "..#..", "..#..", "..#..", ".###."),
+    "m": (".....", ".....", "##.#.", "#.#.#", "#.#.#", "#.#.#", "#.#.#"),
+    "n": (".....", ".....", "####.", "#...#", "#...#", "#...#", "#...#"),
+    "o": (".....", ".....", ".###.", "#...#", "#...#", "#...#", ".###."),
+    "p": (".....", ".....", "####.", "#...#", "####.", "#....", "#...."),
+    "q": (".....", ".....", ".####", "#...#", ".####", "....#", "....#"),
+    "r": (".....", ".....", "#.##.", "##..#", "#....", "#....", "#...."),
+    "s": (".....", ".....", ".####", "#....", ".###.", "....#", "####."),
+    "t": (".#...", ".#...", "#####", ".#...", ".#...", ".#..#", "..##."),
+    "u": (".....", ".....", "#...#", "#...#", "#...#", "#..##", ".##.#"),
+    "v": (".....", ".....", "#...#", "#...#", "#...#", ".#.#.", "..#.."),
+    "w": (".....", ".....", "#...#", "#.#.#", "#.#.#", "#.#.#", ".#.#."),
+    "x": (".....", ".....", "#...#", ".#.#.", "..#..", ".#.#.", "#...#"),
+    "y": (".....", ".....", "#...#", "#...#", ".####", "....#", ".###."),
+    "z": (".....", ".....", "#####", "...#.", "..#..", ".#...", "#####"),
+    "0": (".###.", "#..##", "#.#.#", "#.#.#", "##..#", "#...#", ".###."),
+    "1": ("..#..", ".##..", "..#..", "..#..", "..#..", "..#..", "#####"),
+    "2": (".###.", "#...#", "....#", "..##.", ".#...", "#....", "#####"),
+    "3": ("####.", "....#", "....#", ".###.", "....#", "....#", "####."),
+    "4": ("...#.", "..##.", ".#.#.", "#..#.", "#####", "...#.", "...#."),
+    "5": ("#####", "#....", "####.", "....#", "....#", "#...#", ".###."),
+    "6": (".###.", "#....", "#....", "####.", "#...#", "#...#", ".###."),
+    "7": ("#####", "....#", "...#.", "..#..", ".#...", ".#...", ".#..."),
+    "8": (".###.", "#...#", "#...#", ".###.", "#...#", "#...#", ".###."),
+    "9": (".###.", "#...#", "#...#", ".####", "....#", "....#", ".###."),
+    " ": (".....", ".....", ".....", ".....", ".....", ".....", "....."),
+    ".": (".....", ".....", ".....", ".....", ".....", ".....", "..#.."),
+    ",": (".....", ".....", ".....", ".....", ".....", "..#..", ".#..."),
+    ":": (".....", "..#..", ".....", ".....", ".....", "..#..", "....."),
+    ";": (".....", "..#..", ".....", ".....", ".....", "..#..", ".#..."),
+    "!": ("..#..", "..#..", "..#..", "..#..", "..#..", ".....", "..#.."),
+    "?": (".###.", "#...#", "....#", "..##.", "..#..", ".....", "..#.."),
+    "'": ("..#..", "..#..", ".#...", ".....", ".....", ".....", "....."),
+    "%": ("##..#", "##.#.", "....#", "...#.", "..#..", ".#...", "#..##"),
+    "/": ("....#", "....#", "...#.", "..#..", ".#...", "#....", "#...."),
+    "-": (".....", ".....", ".....", "#####", ".....", ".....", "....."),
+    "+": (".....", "..#..", "..#..", "#####", "..#..", "..#..", "....."),
+    "(": ("...#.", "..#..", ".#...", ".#...", ".#...", "..#..", "...#."),
+    ")": (".#...", "..#..", "....#", "....#", "....#", "..#..", ".#..."),
+    "&": (".###.", "#...#", "#.#..", ".#...", "#.#.#", "#..#.", ".##.#"),
+}
+
+_FONT_BLANK = _FONT_5X7[" "]
+
+
+def _glyph(ch: str):
+    glyph = _FONT_5X7.get(ch)
+    if glyph is None:
+        glyph = _FONT_5X7.get(ch.upper(), _FONT_BLANK)
+    return glyph
+
+
+def _text_width(text: str, scale: int) -> int:
+    return len(text) * 6 * scale - scale if text else 0
+
+
+def _fit_scale(text: str, max_width: int, start: int) -> int:
+    scale = start
+    while scale > 1 and _text_width(text, scale) > max_width:
+        scale -= 1
+    return scale
+
+
+class _Canvas:
+    """A tiny RGB canvas with rectangle and bitmap-text drawing."""
+
+    def __init__(self, width: int, height: int, color):
+        self.width = width
+        self.height = height
+        self.pixels = bytearray(bytes(color) * (width * height))
+
+    def rect(self, x0, y0, x1, y1, color):
+        r, g, b = color
+        for y in range(max(0, y0), min(self.height, y1)):
+            row = y * self.width * 3
+            for x in range(max(0, x0), min(self.width, x1)):
+                i = row + x * 3
+                self.pixels[i] = r
+                self.pixels[i + 1] = g
+                self.pixels[i + 2] = b
+
+    def border(self, x0, y0, x1, y1, color, thickness):
+        self.rect(x0, y0, x1, y0 + thickness, color)
+        self.rect(x0, y1 - thickness, x1, y1, color)
+        self.rect(x0, y0, x0 + thickness, y1, color)
+        self.rect(x1 - thickness, y0, x1, y1, color)
+
+    def text(self, center_x, y, text, scale, color):
+        """Draw text centered on center_x, with its top at y."""
+        x = center_x - _text_width(text, scale) // 2
+        for ch in text:
+            glyph = _glyph(ch)
+            for row_i, row in enumerate(glyph):
+                for col_i, mark in enumerate(row):
+                    if mark == "#":
+                        self.rect(
+                            x + col_i * scale, y + row_i * scale,
+                            x + (col_i + 1) * scale,
+                            y + (row_i + 1) * scale, color,
+                        )
+            x += 6 * scale
+
+    def to_png(self) -> bytes:
+        raw = bytearray()
+        stride = self.width * 3
+        for y in range(self.height):
+            raw.append(0)  # filter type 0 (none) for every row
+            raw += self.pixels[y * stride:(y + 1) * stride]
+
+        def chunk(tag, data):
+            return (
+                struct.pack(">I", len(data)) + tag + data
+                + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+            )
+
+        ihdr = struct.pack(
+            ">IIBBBBB", self.width, self.height, 8, 2, 0, 0, 0
+        )
+        return (
+            b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", ihdr)
+            + chunk(b"IDAT", zlib.compress(bytes(raw), 9))
+            + chunk(b"IEND", b"")
+        )
+
+
+def render_png(stats: dict, tier: str, sentence: str,
+               awards: list[dict]) -> bytes:
+    """The 1200x630 share card as a real PNG, drawn with the bitmap font."""
+    canvas = _Canvas(1200, 630, (16, 16, 20))
+    canvas.rect(24, 24, 1176, 606, (22, 22, 31))
+    canvas.border(24, 24, 1176, 606, (176, 141, 60), 3)
+    accent = (176, 141, 60)
+    gold = (212, 175, 90)
+    paper = (232, 227, 216)
+    muted = (154, 148, 166)
+    faint = (109, 104, 120)
+    canvas.text(600, 62, "THE COURT OF SCREENSHOT AFFAIRS", 2, accent)
+    canvas.text(600, 104, "SNAP JUDGMENT", 7, paper)
+    canvas.text(600, 186, tier, _fit_scale(tier, 1080, 6), gold)
+    canvas.rect(200, 252, 1000, 254, (51, 51, 63))
+    span = f"{stats['first_date']:%b %Y} - {stats['last_date']:%b %Y}"
+    stats_line = (
+        f"{stats['count']:,} screenshots - {stats['total_human']} - {span}"
+    )
+    canvas.text(600, 282, stats_line, _fit_scale(stats_line, 1080, 3), paper)
+    canvas.text(600, 348, f"Night share {stats['night_share']:.1f}%",
+                3, muted)
+    if awards:
+        awards_line = "Awards: " + ", ".join(a["name"] for a in awards[:3])
+    else:
+        awards_line = "Awards: none"
+    canvas.text(600, 402, awards_line, _fit_scale(awards_line, 1080, 2),
+                paper)
+    if sentence:
+        canvas.text(600, 470, sentence, _fit_scale(sentence, 1080, 2),
+                    (207, 201, 186))
+    canvas.text(600, 566,
+                "Judged from file metadata only. No pixels were read.",
+                2, faint)
+    return canvas.to_png()
+
+
 def write_csv(path, shots: list[Shot], recordings: list[Shot]) -> None:
     """Per-file records for every judged screenshot (and recording)."""
     rows = sorted([*shots, *recordings], key=lambda s: s.mtime)
@@ -1270,16 +2031,34 @@ def build_parser() -> argparse.ArgumentParser:
                         help="write a self-contained HTML share card to FILE")
     parser.add_argument("--svg", metavar="FILE",
                         help="write an SVG share card (1200x630) to FILE")
+    parser.add_argument("--png", metavar="FILE",
+                        help="write a PNG share card (1200x630) to FILE")
     parser.add_argument("--out", metavar="FILE",
                         help="write a Markdown report to FILE")
+    parser.add_argument("--html", metavar="FILE", dest="html",
+                        help="write a full HTML report to FILE")
     parser.add_argument("--since", metavar="YYYY",
                         help="only count screenshots from this year onward")
     parser.add_argument("--year", metavar="YYYY",
                         help="only count screenshots from this single year")
     parser.add_argument("--vs", metavar="FOLDER", dest="vs",
                         help="also judge FOLDER as a co-defendant and compare")
+    parser.add_argument("--vs-year", metavar="YYYY", dest="vs_year",
+                        help="compare year YYYY against the most recent other "
+                             "year in the same folders")
+    parser.add_argument("--wrapped-kit", metavar="DIR", dest="wrapped_kit",
+                        help="write a Wrapped kit (SVG card + post drafts) "
+                             "for the current year into DIR")
+    parser.add_argument("--fail-above", metavar="TIER", dest="fail_above",
+                        help="exit 1 when the verdict ranks above this tier, "
+                             "e.g. --fail-above \"Repeat Offender\"")
     parser.add_argument("--judge", choices=list(VOICES), default="fair",
                         help="the presiding judge's voice (default: fair)")
+    parser.add_argument("--judge-file", metavar="FILE", dest="judge_file",
+                        help="load a custom judge voice from a JSON pack")
+    parser.add_argument("--oneline", action="store_true",
+                        help="print exactly one summary line "
+                             "(ignored when --json is given)")
     parser.add_argument("--csv", metavar="FILE",
                         help="write per-file records to FILE as CSV")
     parser.add_argument("--history", action="store_true",
@@ -1319,6 +2098,43 @@ def main(argv=None) -> int:
         year = int(args.year)
         since_year = year
         until_year = year
+
+    vs_year_target = None
+    if args.vs_year is not None:
+        if len(args.vs_year) != 4 or not args.vs_year.isdigit():
+            parser.error("--vs-year must be a four-digit year, e.g. --vs-year 2025")
+        vs_year_target = int(args.vs_year)
+
+    fail_rank = None
+    if args.fail_above is not None:
+        fail_key = _normalize_tier_name(args.fail_above)
+        if fail_key not in TIER_RANKS:
+            print(
+                f"snapjudgment: unknown verdict tier for --fail-above: "
+                f"{args.fail_above!r}; valid tiers: {', '.join(TIER_ORDER)}",
+                file=sys.stderr,
+            )
+            return 2
+        fail_rank = TIER_RANKS[fail_key]
+
+    kit_dir = None
+    if args.wrapped_kit is not None:
+        kit_dir = Path(args.wrapped_kit).expanduser()
+        if year is None:
+            year = datetime.now().year
+            since_year = year
+            until_year = year
+
+    voice = args.judge
+    judge_label = args.judge
+    if args.judge_file is not None:
+        try:
+            pack = load_judge_pack(Path(args.judge_file).expanduser())
+        except SnapError as exc:
+            print(f"snapjudgment: {exc}", file=sys.stderr)
+            return 2
+        voice = register_judge_pack(pack)
+        judge_label = pack["name"]
 
     skipped_box = [0]
     try:
@@ -1365,6 +2181,12 @@ def main(argv=None) -> int:
                 [vs_folder], all_images=args.all, skipped=skipped_box
             )
 
+        all_shots = list(shots)
+        vs_year = None
+        if vs_year_target is not None and shots:
+            vs_year = build_vs_year(shots, recordings, vs_year_target,
+                                    voice=voice)
+
         if since_year is not None:
             shots = [s for s in shots if s.dt.year >= since_year]
             recordings = [r for r in recordings if r.dt.year >= since_year]
@@ -1377,14 +2199,32 @@ def main(argv=None) -> int:
             vs_recordings = [r for r in vs_recordings if r.dt.year <= until_year]
 
         folder_names = [str(f) for f in folders]
+        folder_stats = [
+            {
+                "path": str(folder),
+                "count": sum(
+                    1 for s in shots if Path(s.path).is_relative_to(folder)
+                ),
+            }
+            for folder in folders
+        ]
 
         if not shots:
+            if kit_dir is not None:
+                print(
+                    f"snapjudgment: no screenshots from {year} to wrap; "
+                    "the kit was not written",
+                    file=sys.stderr,
+                )
+                return 2
             if args.json:
                 print(json.dumps({
                     "version": __version__,
-                    "folders": folder_names,
+                    "folders": [
+                        {"path": name, "count": 0} for name in folder_names
+                    ],
                     "verdict": "No Evidence",
-                    "judge": args.judge,
+                    "judge": judge_label,
                     "year": year,
                     "count": 0,
                     "recordings": len(recordings),
@@ -1392,14 +2232,17 @@ def main(argv=None) -> int:
                     "awards": [],
                 }, indent=2))
             else:
-                print(render_no_evidence())
+                if args.oneline:
+                    print("No Evidence · 0 screenshots")
+                else:
+                    print(render_no_evidence())
                 append_history({
                     "timestamp": datetime.now().isoformat(timespec="seconds"),
                     "folders": folder_names,
                     "count": 0,
                     "total_bytes": 0,
                     "verdict": "No Evidence",
-                    "judge": args.judge,
+                    "judge": judge_label,
                 })
             return 2
 
@@ -1410,7 +2253,7 @@ def main(argv=None) -> int:
 
         stats = analyze(shots, recordings)
         stats["skipped"] = skipped_box[0]
-        tier, sentence = verdict_for(stats["count"], voice=args.judge)
+        tier, sentence = verdict_for(stats["count"], voice=voice)
         awards = compute_awards(stats)
 
         versus = None
@@ -1418,7 +2261,7 @@ def main(argv=None) -> int:
         if args.vs is not None:
             vs_stats = analyze(vs_shots, vs_recordings)
             vs_tier, vs_sentence = verdict_for(
-                vs_stats["count"], voice=args.judge
+                vs_stats["count"], voice=voice
             )
             versus = {
                 "folder": str(vs_folder),
@@ -1443,43 +2286,109 @@ def main(argv=None) -> int:
             Path(args.svg).write_text(
                 render_svg(stats, tier, sentence, awards), encoding="utf-8"
             )
+        if args.png:
+            Path(args.png).write_bytes(
+                render_png(stats, tier, sentence, awards)
+            )
         if args.csv:
             write_csv(args.csv, shots, recordings)
         if args.out:
             Path(args.out).write_text(
                 render_markdown(stats, tier, sentence, awards, year=year,
-                                voice=args.judge, versus=versus),
+                                voice=voice, versus=versus,
+                                folders=folder_stats, vs_year=vs_year),
                 encoding="utf-8"
             )
+        if args.html:
+            Path(args.html).write_text(
+                render_html_report(stats, tier, sentence, awards, year=year,
+                                   voice=voice),
+                encoding="utf-8"
+            )
+        kit_written = []
+        if kit_dir is not None:
+            kit_dir.mkdir(parents=True, exist_ok=True)
+            kit_svg = kit_dir / f"wrapped-{year}.svg"
+            kit_svg.write_text(
+                render_svg(stats, tier, sentence, awards), encoding="utf-8"
+            )
+            kit_post = kit_dir / "post.txt"
+            kit_post.write_text(
+                build_wrapped_posts(stats, tier, awards, year),
+                encoding="utf-8",
+            )
+            kit_written = [kit_svg, kit_post]
 
         if args.json:
-            data = build_json(stats, tier, sentence, awards, folder_names,
-                              year=year, judge=args.judge)
+            data = build_json(stats, tier, sentence, awards, folder_stats,
+                              year=year, judge=judge_label)
             if versus is not None:
                 data["versus"] = {
                     "main": build_json(stats, tier, sentence, awards,
-                                       folder_names, year=year,
-                                       judge=args.judge),
+                                       folder_stats, year=year,
+                                       judge=judge_label),
                     "vs": build_json(vs_stats, versus["tier"],
                                      versus["sentence"], versus["awards"],
-                                     [str(vs_folder)], year=year,
-                                     judge=args.judge),
+                                     [{"path": str(vs_folder),
+                                       "count": vs_stats["count"]}],
+                                     year=year, judge=judge_label),
                     "worse_offender": versus["worse"],
+                }
+            if vs_year is not None:
+                def _year_folder_stats(y):
+                    return [
+                        {
+                            "path": str(folder),
+                            "count": sum(
+                                1 for s in all_shots
+                                if s.dt.year == y
+                                and Path(s.path).is_relative_to(folder)
+                            ),
+                        }
+                        for folder in folders
+                    ]
+
+                data["vs_year"] = {
+                    "target_year": vs_year["target_year"],
+                    "other_year": vs_year["other_year"],
+                    "target": build_json(
+                        vs_year["target"]["stats"], vs_year["target"]["tier"],
+                        vs_year["target"]["sentence"],
+                        vs_year["target"]["awards"],
+                        _year_folder_stats(vs_year["target_year"]),
+                        year=vs_year["target_year"], judge=judge_label),
+                    "other": build_json(
+                        vs_year["other"]["stats"], vs_year["other"]["tier"],
+                        vs_year["other"]["sentence"],
+                        vs_year["other"]["awards"],
+                        _year_folder_stats(vs_year["other_year"]),
+                        year=vs_year["other_year"], judge=judge_label),
+                    "change_pct": vs_year["change_pct"],
                 }
             print(json.dumps(data, indent=2))
         else:
-            print(render_report(stats, tier, sentence, awards, year=year,
-                                voice=args.judge, court_record=court_line))
-            if versus is not None:
-                print(render_comparison(stats, tier, versus))
+            if args.oneline:
+                print(oneline_summary(stats, tier))
+            else:
+                print(render_report(stats, tier, sentence, awards, year=year,
+                                    voice=voice, court_record=court_line,
+                                    folders=folder_stats))
+                if versus is not None:
+                    print(render_comparison(stats, tier, versus))
+                if vs_year is not None:
+                    print(render_year_comparison(vs_year))
+                for kit_path in kit_written:
+                    print(kit_path)
             append_history({
                 "timestamp": datetime.now().isoformat(timespec="seconds"),
                 "folders": folder_names,
                 "count": stats["count"],
                 "total_bytes": stats["total_bytes"],
                 "verdict": tier,
-                "judge": args.judge,
+                "judge": judge_label,
             })
+        if fail_rank is not None and tier_rank(tier) > fail_rank:
+            return 1
         return 0
     except SnapError as exc:
         print(f"snapjudgment: {exc}", file=sys.stderr)

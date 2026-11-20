@@ -18,25 +18,42 @@
 - **Weekend share:** 67 (21.6%)
 - **Evidence retention:** 189 over a year old (61.0%)
 - **Screenshots per day:** 0.3
+- **Median per active day:** 1.0
+- **Silent months:** 0
 - **Longest daily streak:** 10 days
 - **Longest clean stretch:** 15 days (Jul 3, 2024 - Jul 17, 2024)
 - **Biggest burst:** 12 screenshots in 60 seconds
 - **Duplicate suspects:** 1 group, 12 files
 - **Duplicate waste:** 41.3 KB
+- **Formats:** PNG 100%
+- **Screenshot season:** Summer (Jun-Aug) - 31.0%
+- **Screenshot anniversary:** Aug 14 - 14 screenshots across 2 years
 - **Screen recordings:** 2
 - **Device eras:** 2
 - **Device era:** 1170x2532 - 153 shots, Jan 5, 2024 to Aug 5, 2026
 - **Device era:** 1920x1080 - 157 shots, Jul 3, 2025 to Nov 10, 2026
-- **Screenshots per year:** 2024: 102, 2025: 103, 2026: 105
+- **Screenshots per year:**
+  - 2024: 102 ███████████████████
+  - 2025: 103 ████████████████████
+  - 2026: 105 ████████████████████
 
 ## The Charges
 
 - **Desktop / landscape:** 157 (50.6%)
 - **Phone (tall):** 153 (49.4%)
 
+## Exhibits
+
+- **Exhibit A** - Screenshot 2024-01-05 at 17.59.50.png (Jan 5, 2024)
+- **Exhibit B** - Screenshot 2024-01-12 at 11.46.18.png (Jan 12, 2024)
+- **Exhibit C** - Screenshot 2024-01-17 at 07.08.34.png (Jan 17, 2024)
+- **Exhibit D** - Screenshot 2024-01-21 at 22.29.11.png (Jan 21, 2024)
+- **Exhibit E** - Screenshot 2024-01-22 at 14.04.37.png (Jan 22, 2024)
+
 ## Awards
 
 - **Night Owl** - 91 screenshots between 10 PM and 5 AM (29.4% of the total).
+- **The 3 AM Club** - 32 screenshots taken between 2 AM and 4 AM, when nothing on screen can be urgent.
 - **Burst Mode** - 12 screenshots inside a single 60-second window.
 - **Repeat Customer** - 12 files share an exact size and dimensions with a sibling. The same screenshot, taken again.
 - **Screenshot Streak** - 10 consecutive days with at least one screenshot.

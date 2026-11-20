@@ -1148,5 +1148,865 @@ class HistoryTests(TempDirCase):
         self.assertIn("no court record", err)
 
 
+# ---------------------------------------------------------------------------
+# exhibits (v0.4.0)
+# ---------------------------------------------------------------------------
+
+class ExhibitsTests(TempDirCase):
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = sj.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def seed_days(self, n, start=datetime(2026, 6, 1, 12, 0)):
+        for i in range(n):
+            write_file(self.root, f"screenshot_{i}.png", make_png(10, 10),
+                       start + timedelta(days=i))
+
+    def test_exhibits_section_lists_five_oldest(self):
+        self.seed_days(7)
+        code, out, _ = self.run_main([str(self.root)])
+        self.assertEqual(code, 0)
+        self.assertIn("EXHIBITS", out)
+        self.assertIn("Exhibit A - screenshot_0.png (Jun 1, 2026)", out)
+        self.assertIn("Exhibit E - screenshot_4.png (Jun 5, 2026)", out)
+        self.assertNotIn("Exhibit F", out)
+
+    def test_exhibits_hidden_below_five(self):
+        self.seed_days(4)
+        code, out, _ = self.run_main([str(self.root)])
+        self.assertEqual(code, 0)
+        self.assertNotIn("EXHIBITS", out)
+
+    def test_exhibits_ties_broken_by_filename(self):
+        when = datetime(2026, 6, 1, 12, 0)
+        write_file(self.root, "screenshot_z.png", make_png(10, 10), when)
+        write_file(self.root, "screenshot_a.png", make_png(10, 10), when)
+        write_file(self.root, "screenshot_m.png", make_png(10, 10),
+                   when + timedelta(days=1))
+        shots, recordings = sj.collect([self.root])
+        stats = sj.analyze(shots, recordings)
+        self.assertEqual(
+            [e["name"] for e in stats["exhibits"]],
+            ["screenshot_a.png", "screenshot_z.png", "screenshot_m.png"],
+        )
+
+    def test_exhibits_in_json(self):
+        self.seed_days(6)
+        code, out, _ = self.run_main([str(self.root), "--json"])
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual(len(data["exhibits"]), 5)
+        self.assertEqual(data["exhibits"][0]["name"], "screenshot_0.png")
+        self.assertEqual(data["exhibits"][0]["date"], "2026-06-01")
+
+    def test_exhibits_in_markdown(self):
+        self.seed_days(5)
+        md = self.root / "report.md"
+        code, _, _ = self.run_main([str(self.root), "--out", str(md)])
+        self.assertEqual(code, 0)
+        text = md.read_text(encoding="utf-8")
+        self.assertIn("## Exhibits", text)
+        self.assertIn("**Exhibit A** - screenshot_0.png (Jun 1, 2026)", text)
+
+
+# ---------------------------------------------------------------------------
+# formats and season evidence (v0.4.0)
+# ---------------------------------------------------------------------------
+
+class FormatsSeasonTests(TempDirCase):
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = sj.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_formats_counts(self):
+        files = [
+            (f"screenshot_p{i}.png", make_png(10, 10),
+             datetime(2026, 6, 1 + i, 12, 0)) for i in range(3)
+        ]
+        files.append(("screenshot_j.jpg", make_jpeg(10, 10),
+                      datetime(2026, 6, 10, 12, 0)))
+        stats, _ = self.stats_for(files)
+        self.assertEqual(stats["formats"], {"jpg": 1, "png": 3})
+
+    def test_formats_evidence_line(self):
+        for i in range(3):
+            write_file(self.root, f"screenshot_p{i}.png", make_png(10, 10),
+                       datetime(2026, 6, 1 + i, 12, 0))
+        write_file(self.root, "screenshot_j.jpg", make_jpeg(10, 10),
+                   datetime(2026, 6, 10, 12, 0))
+        code, out, _ = self.run_main([str(self.root)])
+        self.assertEqual(code, 0)
+        self.assertIn("Formats", out)
+        self.assertIn("PNG 75%", out)
+        self.assertIn("JPG 25%", out)
+
+    def test_season_picks_busiest(self):
+        files = [
+            (f"screenshot_o{i}.png", make_png(10, 10),
+             datetime(2026, 10, 1 + i, 12, 0)) for i in range(4)
+        ]
+        files.append(("screenshot_j.png", make_png(10, 10),
+                      datetime(2026, 1, 15, 12, 0)))
+        stats, _ = self.stats_for(files)
+        self.assertEqual(stats["season"]["name"], "Autumn (Sep-Nov)")
+        self.assertEqual(stats["season"]["share"], 80.0)
+
+    def test_formats_and_season_in_json(self):
+        write_file(self.root, "screenshot_a.png", make_png(10, 10),
+                   datetime(2026, 10, 1, 12, 0))
+        code, out, _ = self.run_main([str(self.root), "--json"])
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual(data["formats"], {"png": 1})
+        self.assertEqual(data["season"]["name"], "Autumn (Sep-Nov)")
+        self.assertEqual(data["season"]["share"], 100.0)
+
+
+# ---------------------------------------------------------------------------
+# per-folder breakdown (v0.4.0)
+# ---------------------------------------------------------------------------
+
+class FolderBreakdownTests(TempDirCase):
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = sj.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def fill(self, folder, n):
+        for i in range(n):
+            write_file(folder, f"screenshot_{i}.png", make_png(10, 10),
+                       datetime(2026, 6, 1, 12, 0) + timedelta(days=i))
+
+    def test_folders_block_in_terminal(self):
+        dir_a, dir_b = self.root / "a", self.root / "b"
+        self.fill(dir_a, 3)
+        self.fill(dir_b, 2)
+        code, out, _ = self.run_main([str(dir_a), str(dir_b)])
+        self.assertEqual(code, 0)
+        self.assertIn("FOLDERS JUDGED", out)
+        self.assertIn(f"{dir_a} - 3 screenshots", out)
+        self.assertIn(f"{dir_b} - 2 screenshots", out)
+
+    def test_folders_block_hidden_for_single_folder(self):
+        self.fill(self.root, 3)
+        code, out, _ = self.run_main([str(self.root)])
+        self.assertEqual(code, 0)
+        self.assertNotIn("FOLDERS JUDGED", out)
+
+    def test_folders_in_json(self):
+        dir_a, dir_b = self.root / "a", self.root / "b"
+        self.fill(dir_a, 3)
+        self.fill(dir_b, 2)
+        code, out, _ = self.run_main([str(dir_a), str(dir_b), "--json"])
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual(
+            data["folders"],
+            [{"path": str(dir_a), "count": 3},
+             {"path": str(dir_b), "count": 2}],
+        )
+
+    def test_vs_folder_not_in_main_folders(self):
+        dir_a, dir_b = self.root / "a", self.root / "b"
+        self.fill(dir_a, 3)
+        self.fill(dir_b, 2)
+        code, out, _ = self.run_main([str(dir_a), "--vs", str(dir_b),
+                                      "--json"])
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual(data["folders"],
+                         [{"path": str(dir_a), "count": 3}])
+        self.assertEqual(data["versus"]["vs"]["folders"],
+                         [{"path": str(dir_b), "count": 2}])
+
+
+# ---------------------------------------------------------------------------
+# year comparison (v0.4.0)
+# ---------------------------------------------------------------------------
+
+class VsYearTests(TempDirCase):
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = sj.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def fill_year(self, year, n, start_day=0):
+        base = datetime(year, 1, 1, 12, 0)
+        for i in range(n):
+            write_file(self.root, f"screenshot_{year}_{i}.png",
+                       make_png(10, 10), base + timedelta(days=start_day + i))
+
+    def test_vs_year_improvement(self):
+        self.fill_year(2025, 100)
+        self.fill_year(2026, 50)
+        code, out, _ = self.run_main([str(self.root), "--vs-year", "2026"])
+        self.assertEqual(code, 0)
+        self.assertIn("YEAR COMPARISON", out)
+        self.assertIn(
+            "The court notes improvement: 2026 is down 50% on 2025.", out
+        )
+
+    def test_vs_year_relapse(self):
+        self.fill_year(2025, 50)
+        self.fill_year(2026, 100)
+        code, out, _ = self.run_main([str(self.root), "--vs-year", "2026"])
+        self.assertEqual(code, 0)
+        self.assertIn(
+            "The court notes a relapse: 2026 is up 100% on 2025.", out
+        )
+
+    def test_vs_year_target_may_be_the_older_year(self):
+        self.fill_year(2025, 100)
+        self.fill_year(2026, 50)
+        code, out, _ = self.run_main([str(self.root), "--vs-year", "2025"])
+        self.assertEqual(code, 0)
+        self.assertIn("YEAR COMPARISON", out)
+        self.assertIn(
+            "The court notes improvement: 2026 is down 50% on 2025.", out
+        )
+
+    def test_vs_year_no_change(self):
+        self.fill_year(2025, 40)
+        self.fill_year(2026, 40)
+        code, out, _ = self.run_main([str(self.root), "--vs-year", "2026"])
+        self.assertEqual(code, 0)
+        self.assertIn("The court notes no change in behavior", out)
+
+    def test_vs_year_json(self):
+        self.fill_year(2025, 100)
+        self.fill_year(2026, 50)
+        code, out, _ = self.run_main([str(self.root), "--vs-year", "2026",
+                                      "--json"])
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        vs_year = data["vs_year"]
+        self.assertEqual(vs_year["target_year"], 2026)
+        self.assertEqual(vs_year["other_year"], 2025)
+        self.assertEqual(vs_year["target"]["count"], 50)
+        self.assertEqual(vs_year["other"]["count"], 100)
+        self.assertEqual(vs_year["target"]["verdict"], "Petty Offender")
+        self.assertEqual(vs_year["change_pct"], -50.0)
+
+    def test_vs_year_single_year_exits_2(self):
+        self.fill_year(2026, 10)
+        code, _, err = self.run_main([str(self.root), "--vs-year", "2026"])
+        self.assertEqual(code, 2)
+        self.assertIn("at least two different years", err)
+
+    def test_vs_year_absent_year_exits_2(self):
+        self.fill_year(2025, 10)
+        self.fill_year(2026, 10)
+        code, _, err = self.run_main([str(self.root), "--vs-year", "2024"])
+        self.assertEqual(code, 2)
+        self.assertIn("no screenshots from 2024", err)
+
+
+# ---------------------------------------------------------------------------
+# wrapped kit (v0.4.0)
+# ---------------------------------------------------------------------------
+
+class WrappedKitTests(TempDirCase):
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = sj.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def seed_year(self, year, n=12):
+        base = datetime(year, 3, 1, 23, 0)
+        for i in range(n):
+            write_file(self.root, f"screenshot_{i}.png", make_png(10, 10),
+                       base + timedelta(days=i))
+
+    def short_post(self, text):
+        lines = text.splitlines()
+        start = lines.index("SHORT POST") + 1
+        return lines[start]
+
+    def test_kit_writes_svg_and_post(self):
+        year = datetime.now().year
+        self.seed_year(year)
+        kit = self.root / "kit"
+        code, out, _ = self.run_main([str(self.root), "--wrapped-kit",
+                                      str(kit)])
+        self.assertEqual(code, 0)
+        svg = kit / f"wrapped-{year}.svg"
+        post = kit / "post.txt"
+        self.assertTrue(svg.is_file())
+        self.assertTrue(post.is_file())
+        self.assertIn(str(svg), out)
+        self.assertIn(str(post), out)
+        self.assertIn("SNAP JUDGMENT", svg.read_text(encoding="utf-8"))
+
+    def test_kit_post_contents(self):
+        year = datetime.now().year
+        self.seed_year(year)
+        kit = self.root / "kit"
+        code, _, _ = self.run_main([str(self.root), "--wrapped-kit",
+                                    str(kit)])
+        self.assertEqual(code, 0)
+        text = (kit / "post.txt").read_text(encoding="utf-8")
+        self.assertIn("STANDARD POST", text)
+        short = self.short_post(text)
+        self.assertLessEqual(len(short), 280)
+        self.assertIn("12 screenshots", short)
+        self.assertIn("Innocent Bystander", short)
+        self.assertIn("12 screenshots", text)
+        self.assertIn("Innocent Bystander", text)
+        self.assertIn(
+            "https://github.com/littlestjames82-sys/snap-judgment", text
+        )
+
+    def test_kit_with_explicit_year(self):
+        self.seed_year(2025)
+        kit = self.root / "kit"
+        code, _, _ = self.run_main([str(self.root), "--year", "2025",
+                                    "--wrapped-kit", str(kit)])
+        self.assertEqual(code, 0)
+        self.assertTrue((kit / "wrapped-2025.svg").is_file())
+        text = (kit / "post.txt").read_text(encoding="utf-8")
+        self.assertIn("My 2025 in screenshots", text)
+
+    def test_kit_empty_year_exits_2_and_writes_nothing(self):
+        self.seed_year(2024)
+        kit = self.root / "kit"
+        code, _, err = self.run_main([str(self.root), "--year", "2026",
+                                      "--wrapped-kit", str(kit)])
+        self.assertEqual(code, 2)
+        self.assertIn("no screenshots from 2026", err)
+        self.assertFalse(kit.exists())
+
+
+# ---------------------------------------------------------------------------
+# fail-above gate (v0.4.0)
+# ---------------------------------------------------------------------------
+
+class FailAboveTests(TempDirCase):
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = sj.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def seed(self, n=60):
+        for i in range(n):
+            write_file(self.root, f"screenshot_{i}.png", make_png(10, 10),
+                       datetime(2026, 1, 1, 12, 0) + timedelta(days=i % 300))
+
+    def test_fail_above_lower_tier_exits_1(self):
+        self.seed()
+        code, out, _ = self.run_main(
+            [str(self.root), "--fail-above", "Innocent Bystander"]
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("Petty Offender", out)  # the report still prints
+
+    def test_fail_above_same_tier_exits_0(self):
+        self.seed()
+        code, _, _ = self.run_main(
+            [str(self.root), "--fail-above", "Petty Offender"]
+        )
+        self.assertEqual(code, 0)
+
+    def test_fail_above_higher_tier_exits_0(self):
+        self.seed()
+        code, _, _ = self.run_main(
+            [str(self.root), "--fail-above", "Repeat Offender"]
+        )
+        self.assertEqual(code, 0)
+
+    def test_fail_above_name_is_flexible(self):
+        self.seed()
+        for spelling in ("petty-offender", "PETTY  OFFENDER", " petty offender "):
+            with self.subTest(spelling=spelling):
+                code, _, _ = self.run_main(
+                    [str(self.root), "--fail-above", spelling]
+                )
+                self.assertEqual(code, 0)
+        code, _, _ = self.run_main(
+            [str(self.root), "--fail-above", "innocent-bystander"]
+        )
+        self.assertEqual(code, 1)
+
+    def test_fail_above_unknown_tier_exits_2(self):
+        self.seed()
+        code, _, err = self.run_main(
+            [str(self.root), "--fail-above", "Banana"]
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("Innocent Bystander", err)
+        self.assertIn("Unrepentant Screenshot Felon", err)
+
+    def test_fail_above_applies_in_json_mode(self):
+        self.seed()
+        code, out, _ = self.run_main(
+            [str(self.root), "--json", "--fail-above", "Innocent Bystander"]
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(out)["verdict"], "Petty Offender")
+
+    def test_fail_above_no_evidence_stays_2(self):
+        code, _, _ = self.run_main(
+            [str(self.root), "--fail-above", "Innocent Bystander"]
+        )
+        self.assertEqual(code, 2)
+
+
+# ---------------------------------------------------------------------------
+# new awards and markdown bars (v0.4.0)
+# ---------------------------------------------------------------------------
+
+class NewAward040Tests(TempDirCase):
+    def test_three_am_club(self):
+        files = [
+            (f"screenshot_{i}.png", make_png(10, 10),
+             datetime(2026, 6, 1 + (i % 20), 2 + (i % 2), 30))
+            for i in range(10)
+        ]
+        stats, _ = self.stats_for(files)
+        self.assertEqual(stats["three_am_count"], 10)
+        self.assertIn("The 3 AM Club", award_names(stats))
+
+    def test_three_am_club_not_earned_at_nine(self):
+        files = [
+            (f"screenshot_{i}.png", make_png(10, 10),
+             datetime(2026, 6, 1 + (i % 20), 3, 30))
+            for i in range(9)
+        ]
+        stats, _ = self.stats_for(files)
+        self.assertEqual(stats["three_am_count"], 9)
+        self.assertNotIn("The 3 AM Club", award_names(stats))
+
+    def test_lifer(self):
+        files = [
+            ("screenshot_a.png", make_png(10, 10), datetime(2018, 1, 1, 12, 0)),
+            ("screenshot_b.png", make_png(10, 10), datetime(2026, 6, 1, 12, 0)),
+        ]
+        stats, _ = self.stats_for(files)
+        self.assertGreaterEqual(stats["span_days"], 8 * 365)
+        names = award_names(stats)
+        self.assertIn("Lifer", names)
+        lifer = [a for a in sj.compute_awards(stats)
+                 if a["name"] == "Lifer"][0]
+        self.assertIn("years", lifer["evidence"])
+
+    def test_lifer_not_earned_below_eight_years(self):
+        files = [
+            ("screenshot_a.png", make_png(10, 10), datetime(2022, 1, 1, 12, 0)),
+            ("screenshot_b.png", make_png(10, 10), datetime(2026, 1, 1, 12, 0)),
+        ]
+        stats, _ = self.stats_for(files)
+        self.assertIn("Time Traveler", award_names(stats))
+        self.assertNotIn("Lifer", award_names(stats))
+
+    def test_markdown_year_bars(self):
+        files = [
+            ("screenshot_a1.png", make_png(10, 10), datetime(2024, 3, 1, 12, 0)),
+            ("screenshot_a2.png", make_png(10, 10), datetime(2024, 4, 1, 12, 0)),
+            ("screenshot_b1.png", make_png(10, 10), datetime(2026, 3, 1, 12, 0)),
+            ("screenshot_b2.png", make_png(10, 10), datetime(2026, 4, 1, 12, 0)),
+            ("screenshot_b3.png", make_png(10, 10), datetime(2026, 5, 1, 12, 0)),
+            ("screenshot_b4.png", make_png(10, 10), datetime(2026, 6, 1, 12, 0)),
+        ]
+        for name, data, when in files:
+            write_file(self.root, name, data, when)
+        md = self.root / "report.md"
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = sj.main([str(self.root), "--out", str(md)])
+        self.assertEqual(code, 0)
+        text = md.read_text(encoding="utf-8")
+        self.assertIn(f"2026: 4 {'█' * 20}", text)
+        self.assertIn(f"2024: 2 {'█' * 10}", text)
+
+
+# ---------------------------------------------------------------------------
+# PNG share card (v0.5.0)
+# ---------------------------------------------------------------------------
+
+class PngCardTests(TempDirCase):
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = sj.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def seed(self, n=3):
+        for i in range(n):
+            write_file(self.root, f"screenshot_{i}.png", make_png(100, 100),
+                       datetime(2026, 6, 1, 12, 0) + timedelta(days=i))
+
+    def test_png_signature_and_dimensions(self):
+        self.seed()
+        png = self.root / "card.png"
+        code, _, _ = self.run_main([str(self.root), "--png", str(png)])
+        self.assertEqual(code, 0)
+        data = png.read_bytes()
+        self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(data[12:16], b"IHDR")
+        self.assertEqual(int.from_bytes(data[16:20], "big"), 1200)
+        self.assertEqual(int.from_bytes(data[20:24], "big"), 630)
+
+    def test_png_render_is_deterministic(self):
+        stats, _ = self.stats_for([
+            (f"screenshot_{i}.png", make_png(100, 100),
+             datetime(2026, 6, 1 + i, 12, 0)) for i in range(3)
+        ])
+        tier, sentence = sj.verdict_for(stats["count"])
+        awards = sj.compute_awards(stats)
+        first = sj.render_png(stats, tier, sentence, awards)
+        second = sj.render_png(stats, tier, sentence, awards)
+        self.assertEqual(first, second)
+        self.assertGreater(len(first), 1000)
+
+    def test_png_unusual_characters_do_not_crash(self):
+        stats, _ = self.stats_for([
+            ("screenshot_a.png", make_png(10, 10),
+             datetime(2026, 6, 1, 12, 0)),
+        ])
+        data = sj.render_png(stats, "Guilty ☃ & <weird>!",
+                             "A sentence with a snowman ☃.", [])
+        self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
+
+    def test_font_covers_required_characters(self):
+        required = (
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+            "0123456789.,:;!?'%/-+()& "
+        )
+        for ch in required:
+            with self.subTest(ch=ch):
+                self.assertIn(ch, sj._FONT_5X7)
+                glyph = sj._FONT_5X7[ch]
+                self.assertEqual(len(glyph), 7)
+                self.assertTrue(all(len(row) == 5 for row in glyph))
+
+
+# ---------------------------------------------------------------------------
+# judge packs (v0.5.0)
+# ---------------------------------------------------------------------------
+
+class JudgePackTests(TempDirCase):
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = sj.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def seed(self, n=3):
+        for i in range(n):
+            write_file(self.root, f"screenshot_{i}.png", make_png(100, 100),
+                       datetime(2026, 6, 1, 12, 0) + timedelta(days=i))
+
+    def write_pack(self, pack, name="pack.json"):
+        path = self.root / name
+        path.write_text(json.dumps(pack), encoding="utf-8")
+        return path
+
+    def poet_pack(self):
+        return {
+            "name": "The Poet",
+            "intro": "The Poet presides over {count} screenshots, "
+                     "verdict to come: {tier}.",
+            "sentences": {
+                "Innocent Bystander": "A short poem of a folder.",
+            },
+            "award_lead": "The court pins these medals:",
+        }
+
+    def test_pack_voice_applied(self):
+        self.seed()
+        pack = self.write_pack(self.poet_pack())
+        code, out, _ = self.run_main(
+            [str(self.root), "--judge-file", str(pack)]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("Presiding: The Poet", out)
+        self.assertIn(
+            "The Poet presides over 3 screenshots, verdict to come: "
+            "Innocent Bystander.", out,
+        )
+        self.assertIn("A short poem of a folder.", out)
+        self.assertIn("The court pins these medals:", out)
+
+    def test_pack_name_in_json(self):
+        self.seed()
+        pack = self.write_pack(self.poet_pack())
+        code, out, _ = self.run_main(
+            [str(self.root), "--json", "--judge-file", str(pack)]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["judge"], "The Poet")
+
+    def test_pack_missing_tier_falls_back_to_fair(self):
+        for i in range(60):  # Petty Offender; the pack has no such sentence
+            write_file(self.root, f"screenshot_{i}.png", make_png(10, 10),
+                       datetime(2026, 1, 1, 12, 0) + timedelta(days=i % 300))
+        pack = self.write_pack(self.poet_pack())
+        code, out, _ = self.run_main(
+            [str(self.root), "--judge-file", str(pack)]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("Petty Offender", out)
+        self.assertIn(
+            "Sentence: community service. Delete one duplicate. "
+            "Just one. Baby steps.", out,
+        )
+
+    def test_pack_invalid_json_exits_2(self):
+        path = self.root / "bad.json"
+        path.write_text("{not json", encoding="utf-8")
+        code, _, err = self.run_main(
+            [str(self.root), "--judge-file", str(path)]
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("not valid JSON", err)
+
+    def test_pack_wrong_shape_exits_2(self):
+        for bad in (["not", "an", "object"],
+                    {"name": 5},
+                    {"name": "X", "sentences": {"A": 3}},
+                    {"name": "X", "intro": 4}):
+            with self.subTest(bad=bad):
+                pack = self.write_pack(bad, name="bad.json")
+                code, _, err = self.run_main(
+                    [str(self.root), "--judge-file", str(pack)]
+                )
+                self.assertEqual(code, 2)
+                self.assertIn("judge file", err)
+
+    def test_pack_missing_file_exits_2(self):
+        code, _, err = self.run_main(
+            [str(self.root), "--judge-file", str(self.root / "nope.json")]
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("judge file not found", err)
+
+
+# ---------------------------------------------------------------------------
+# HTML report (v0.5.0)
+# ---------------------------------------------------------------------------
+
+class HtmlReportTests(TempDirCase):
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = sj.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_html_report_contents(self):
+        for i in range(6):
+            write_file(self.root, f"screenshot_{i}.png", make_png(10, 10),
+                       datetime(2026, 6, 1, 12, 0) + timedelta(days=i))
+        page = self.root / "report.html"
+        code, _, _ = self.run_main([str(self.root), "--html", str(page)])
+        self.assertEqual(code, 0)
+        text = page.read_text(encoding="utf-8")
+        self.assertIn("<title>Snap Judgment - Innocent Bystander</title>",
+                      text)
+        self.assertIn("The Evidence", text)
+        self.assertIn("Total screenshots", text)
+        self.assertIn('class="bar"', text)
+        self.assertIn("width:100.0%", text)
+        self.assertIn("Exhibits", text)
+        self.assertIn("Exhibit A", text)
+        self.assertIn("Awards", text)
+        self.assertIn("case dismissed", text)
+
+    def test_html_report_escapes_filenames(self):
+        write_file(self.root, "screenshot_<b>.png", make_png(10, 10),
+                   datetime(2026, 6, 1, 12, 0))
+        page = self.root / "report.html"
+        code, _, _ = self.run_main([str(self.root), "--html", str(page)])
+        self.assertEqual(code, 0)
+        text = page.read_text(encoding="utf-8")
+        self.assertIn("screenshot_&lt;b&gt;.png", text)
+        self.assertNotIn("screenshot_<b>.png", text)
+
+
+# ---------------------------------------------------------------------------
+# silent months, median, anniversary (v0.5.0)
+# ---------------------------------------------------------------------------
+
+class NewStats050Tests(TempDirCase):
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = sj.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_silent_months(self):
+        files = [
+            ("screenshot_jan.png", make_png(10, 10),
+             datetime(2026, 1, 15, 12, 0)),
+            ("screenshot_apr.png", make_png(10, 10),
+             datetime(2026, 4, 15, 12, 0)),
+        ]
+        stats, _ = self.stats_for(files)
+        self.assertEqual(stats["silent_months"], 2)  # February and March
+
+    def test_median_per_active_day(self):
+        files = [
+            ("screenshot_a.png", make_png(10, 10), datetime(2026, 1, 1, 12, 0)),
+            ("screenshot_b1.png", make_png(10, 10), datetime(2026, 1, 2, 12, 0)),
+            ("screenshot_b2.png", make_png(10, 10), datetime(2026, 1, 2, 13, 0)),
+            ("screenshot_c1.png", make_png(10, 10), datetime(2026, 1, 3, 12, 0)),
+            ("screenshot_c2.png", make_png(10, 10), datetime(2026, 1, 3, 13, 0)),
+            ("screenshot_c3.png", make_png(10, 10), datetime(2026, 1, 3, 14, 0)),
+        ]
+        stats, _ = self.stats_for(files)
+        self.assertEqual(stats["median_per_active_day"], 2.0)
+
+    def test_anniversary(self):
+        files = []
+        for year, n in ((2024, 2), (2025, 2), (2026, 1)):
+            for i in range(n):
+                files.append((f"screenshot_{year}_{i}.png", make_png(10, 10),
+                              datetime(year, 3, 14, 10 + i, 0)))
+        files.append(("screenshot_other.png", make_png(10, 10),
+                      datetime(2026, 7, 4, 12, 0)))
+        stats, _ = self.stats_for(files)
+        self.assertEqual(
+            stats["anniversary"],
+            {"month_day": "Mar 14", "count": 5, "years": 3},
+        )
+
+    def test_anniversary_below_threshold_is_none(self):
+        files = [
+            (f"screenshot_{i}.png", make_png(10, 10),
+             datetime(2026, 3, 14, 10 + i, 0)) for i in range(4)
+        ]
+        stats, _ = self.stats_for(files)
+        self.assertIsNone(stats["anniversary"])
+
+    def test_new_stats_in_json_and_evidence(self):
+        write_file(self.root, "screenshot_jan.png", make_png(10, 10),
+                   datetime(2026, 1, 15, 12, 0))
+        write_file(self.root, "screenshot_apr.png", make_png(10, 10),
+                   datetime(2026, 4, 15, 12, 0))
+        code, out, _ = self.run_main([str(self.root), "--json"])
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual(data["silent_months"], 2)
+        self.assertEqual(data["median_per_active_day"], 1.0)
+        self.assertIsNone(data["anniversary"])
+        code, out, _ = self.run_main([str(self.root)])
+        self.assertEqual(code, 0)
+        self.assertIn("Silent months", out)
+        self.assertIn("Median per active day", out)
+
+
+# ---------------------------------------------------------------------------
+# anniversary and creature-of-habit awards (v0.5.0)
+# ---------------------------------------------------------------------------
+
+class NewAward050Tests(TempDirCase):
+    def test_anniversary_award(self):
+        files = []
+        for year in (2024, 2025, 2026):
+            for i in range(5):
+                files.append((f"screenshot_{year}_{i}.png", make_png(10, 10),
+                              datetime(year, 3, 14, 9 + i, 0)))
+        stats, _ = self.stats_for(files)
+        self.assertEqual(stats["anniversary"]["count"], 15)
+        names = award_names(stats)
+        self.assertIn("Anniversary", names)
+        award = [a for a in sj.compute_awards(stats)
+                 if a["name"] == "Anniversary"][0]
+        self.assertIn("Mar 14", award["evidence"])
+        self.assertIn("15", award["evidence"])
+
+    def test_creature_of_habit(self):
+        files = []
+        for i in range(7):
+            files.append((f"screenshot_d{i}.png", make_png(10, 10),
+                          datetime(2026, 6, 1 + i, 9 + i, 0)))
+        for i in range(3):
+            files.append((f"screenshot_h{i}.png", make_png(10, 10),
+                          datetime(2026, 6, 10 + i, 14, 0)))
+        stats, _ = self.stats_for(files)
+        self.assertEqual(stats["busiest_hour"], 14)
+        self.assertIn("Creature of Habit", award_names(stats))
+
+    def test_creature_of_habit_not_earned_when_spread_out(self):
+        files = [
+            (f"screenshot_{i}.png", make_png(10, 10),
+             datetime(2026, 6, 1 + (i % 5), 8 + i, 0))
+            for i in range(10)
+        ]
+        stats, _ = self.stats_for(files)
+        self.assertNotIn("Creature of Habit", award_names(stats))
+
+
+# ---------------------------------------------------------------------------
+# one-line mode (v0.5.0)
+# ---------------------------------------------------------------------------
+
+class OnelineTests(TempDirCase):
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = sj.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def seed(self, n=3):
+        for i in range(n):
+            write_file(self.root, f"screenshot_{i}.png", make_png(100, 100),
+                       datetime(2026, 6, 1, 12, 0) + timedelta(days=i))
+
+    def test_oneline_exactly_one_line(self):
+        self.seed()
+        code, out, _ = self.run_main([str(self.root), "--oneline"])
+        self.assertEqual(code, 0)
+        lines = out.strip().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(
+            lines[0].startswith("Innocent Bystander · 3 screenshots · ")
+        )
+        self.assertTrue(lines[0].endswith("Jun 2026 - Jun 2026"))
+
+    def test_oneline_format_matches_summary_helper(self):
+        stats, _ = self.stats_for([
+            (f"screenshot_{i}.png", make_png(100, 100),
+             datetime(2026, 6, 1 + i, 12, 0)) for i in range(3)
+        ])
+        line = sj.oneline_summary(stats, "Innocent Bystander")
+        size = sj.human_bytes(3 * len(make_png(100, 100)))
+        self.assertEqual(
+            line,
+            f"Innocent Bystander · 3 screenshots · {size} · "
+            "Jun 2026 - Jun 2026",
+        )
+
+    def test_oneline_still_writes_card(self):
+        self.seed()
+        card = self.root / "card.html"
+        code, out, _ = self.run_main(
+            [str(self.root), "--oneline", "--card", str(card)]
+        )
+        self.assertEqual(code, 0)
+        self.assertTrue(card.is_file())
+        self.assertEqual(len(out.strip().splitlines()), 1)
+
+    def test_oneline_json_wins(self):
+        self.seed()
+        code, out, _ = self.run_main(
+            [str(self.root), "--oneline", "--json"]
+        )
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual(data["verdict"], "Innocent Bystander")
+
+    def test_oneline_no_evidence(self):
+        code, out, _ = self.run_main([str(self.root), "--oneline"])
+        self.assertEqual(code, 2)
+        self.assertEqual(out.strip(), "No Evidence · 0 screenshots")
+
+
 if __name__ == "__main__":
     unittest.main()

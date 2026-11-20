@@ -1,0 +1,36 @@
+name: "Snap Judgment"
+description: "Judge a folder of screenshots and append the courtroom verdict to the workflow summary."
+author: "Ghost Developer Studio"
+inputs:
+  path:
+    description: "Folder of screenshots to judge"
+    required: true
+  judge:
+    description: "The presiding judge's voice: strict, fair, or lenient"
+    required: false
+    default: "fair"
+  fail-above:
+    description: "Fail the step when the verdict ranks above this tier, e.g. \"Repeat Offender\" (optional)"
+    required: false
+    default: ""
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - name: Install Snap Judgment
+      run: pip install "${{ github.action_path }}"
+      shell: bash
+    - name: Judge the screenshots
+      run: |
+        report="$(mktemp)"
+        args=("${{ inputs.path }}" --judge "${{ inputs.judge }}" --out "$report")
+        if [ -n "${{ inputs.fail-above }}" ]; then
+          args+=(--fail-above "${{ inputs.fail-above }}")
+        fi
+        snapjudgment "${args[@]}"; code=$?
+        cat "$report" >> "$GITHUB_STEP_SUMMARY"
+        exit $code
+      shell: bash

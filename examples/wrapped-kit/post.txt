@@ -1,0 +1,12 @@
+SHORT POST
+My 2026 in screenshots, judged by Snap Judgment: 105 screenshots, verdict Petty Offender, 27% taken after 10 PM, longest streak 10 days. It reads metadata only, never the pictures. https://github.com/littlestjames82-sys/snap-judgment
+
+STANDARD POST
+My 2026 in screenshots, judged by Snap Judgment.
+
+Verdict: Petty Offender
+105 screenshots, 4.9 MB of evidence.
+Top awards: Night Owl, The 3 AM Club
+
+Snap Judgment reads file metadata only. It never looks at the pictures.
+https://github.com/littlestjames82-sys/snap-judgment
