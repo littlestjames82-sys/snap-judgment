@@ -629,13 +629,116 @@ function pleaClosing(plea, currentTier) {
   return "The court notes this plea changes nothing. The verdict stands.";
 }
 
-/* The ready-to-post verdict text for the copy button. */
+/* The ready-to-post verdict text for the copy button. When a plea
+ * bargain rides along on the stats, the text gains the plea line:
+ * the projected drop when the plea improves the tier, the standing
+ * verdict when it changes nothing. */
 function verdictPostText(stats) {
-  return "My screenshots folder just got judged by Snap Judgment: " +
+  var text = "My screenshots folder just got judged by Snap Judgment: " +
     stats.count + " screenshots, verdict " + stats.tier + ", " +
     stats.nightShare.toFixed(1) + "% taken at night. " +
-    "It reads metadata only, never the pictures. " +
-    "https://littlestjames82-sys.github.io/snap-judgment/demo.html";
+    "It reads metadata only, never the pictures.";
+  var plea = stats.pleaBargain;
+  if (plea) {
+    if (tierRank(plea.projectedTier) < tierRank(stats.tier)) {
+      text += " The plea bargain: delete " + plea.removedCount +
+        " screenshots (duplicates and older than " + plea.years +
+        " years) and the verdict drops to " + plea.projectedTier + ".";
+    } else {
+      text += " The plea bargain changes nothing. The verdict stands.";
+    }
+  }
+  return text + " https://littlestjames82-sys.github.io/snap-judgment/demo.html";
+}
+
+/* ------------------------------------------------------------------ */
+/* The sample defendant (a synthetic folder, judged like any other)    */
+/* ------------------------------------------------------------------ */
+
+/* mulberry32: a tiny deterministic PRNG, so the sample folder is the
+ * same folder on every machine and every run. */
+function mulberry32(seed) {
+  var a = seed >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    var t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/* A synthetic folder of 340 screenshots spanning about 14 months, in
+ * the same {name, size, mtime, width, height} shape as a real scan:
+ * two dimension pairs, about 40% of shots at night, a 12-shot burst
+ * inside one minute, a 12-file duplicate group, and one file dated in
+ * the future. Anchored to nowMs (default Date.now()) so the future
+ * file stays future and the span stays recent; the seeded draws make
+ * the counts, the night share, and the verdict identical every run. */
+function makeSampleFiles(nowMs) {
+  if (nowMs === undefined || nowMs === null) nowMs = Date.now();
+  var rand = mulberry32(20261119);
+  var PHONE = { width: 1170, height: 2532 };
+  var DESKTOP = { width: 1920, height: 1080 };
+  var NIGHT_HOURS = [22, 23, 0, 1, 2, 3, 4];
+  var SPAN_DAYS = 426; /* about 14 months */
+
+  var anchor = new Date(nowMs);
+  anchor.setDate(anchor.getDate() - 2);
+
+  function at(dayOffset, hour, minute, second) {
+    var d = new Date(anchor.getTime());
+    d.setDate(d.getDate() - dayOffset);
+    d.setHours(hour, minute || 0, second || 0, 0);
+    return d;
+  }
+  function pickHour() {
+    if (rand() < 0.40) return NIGHT_HOURS[Math.floor(rand() * NIGHT_HOURS.length)];
+    return 6 + Math.floor(rand() * 16); /* 6 AM to 9 PM */
+  }
+  function pickDims() { return rand() < 0.6 ? PHONE : DESKTOP; }
+  function pickSize() { return 90000 + Math.floor(rand() * 2300000); }
+  function nameFor(d) {
+    function pad(n) { return (n < 10 ? "0" : "") + n; }
+    return "Screenshot " + d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" +
+      pad(d.getDate()) + " at " + pad(d.getHours()) + "." + pad(d.getMinutes()) +
+      "." + pad(d.getSeconds()) + ".png";
+  }
+  function regular(dayOffset) {
+    var d = at(dayOffset, pickHour(), Math.floor(rand() * 60), Math.floor(rand() * 60));
+    var dims = pickDims();
+    return { name: nameFor(d), size: pickSize(), mtime: d.getTime(),
+             width: dims.width, height: dims.height };
+  }
+
+  var files = [];
+  var i;
+  /* 315 regular screenshots spread over the span. */
+  for (i = 0; i < 315; i++) {
+    files.push(regular(Math.floor(rand() * (SPAN_DAYS + 1))));
+  }
+  /* A 12-shot burst inside a single minute, one evening. */
+  var burstDay = 30 + Math.floor(rand() * 300);
+  var burstStart = at(burstDay, 21, 14, 0);
+  for (i = 0; i < 12; i++) {
+    var bd = new Date(burstStart.getTime() + i * 4000);
+    var bdims = pickDims();
+    files.push({ name: nameFor(bd), size: pickSize(), mtime: bd.getTime(),
+                 width: bdims.width, height: bdims.height });
+  }
+  /* A 12-file duplicate group: one size, one set of dimensions. */
+  for (i = 0; i < 12; i++) {
+    var dd = at(Math.floor(rand() * (SPAN_DAYS + 1)), pickHour(),
+                Math.floor(rand() * 60), Math.floor(rand() * 60));
+    files.push({ name: nameFor(dd), size: 654321, mtime: dd.getTime(),
+                 width: PHONE.width, height: PHONE.height });
+  }
+  /* One screenshot dated in the future. The court admits it anyway. */
+  var fd = new Date(anchor.getTime());
+  fd.setDate(fd.getDate() + 45);
+  fd.setHours(14, 5, 0, 0);
+  files.push({ name: nameFor(fd), size: 812345, mtime: fd.getTime(),
+               width: PHONE.width, height: PHONE.height });
+  return files;
 }
 
 if (typeof module !== "undefined" && module.exports) {
@@ -653,7 +756,8 @@ if (typeof module !== "undefined" && module.exports) {
     computeStats: computeStats,
     computePleaBargain: computePleaBargain,
     pleaClosing: pleaClosing,
-    verdictPostText: verdictPostText
+    verdictPostText: verdictPostText,
+    makeSampleFiles: makeSampleFiles
   };
 }
 
@@ -680,6 +784,7 @@ function initDemo() {
   var overlay = document.getElementById("dropOverlay");
   var currentStats = null;
   var currentVoice = "fair";
+  var currentSample = false;
 
   function setStatus(msg) { status.textContent = msg; }
 
@@ -690,6 +795,22 @@ function initDemo() {
       input.click();
     }
   });
+
+  /* The sample defendant: a synthetic folder through the same
+   * computeStats / plea / render path as a real one, for browsers
+   * (and moments) where no folder can be picked. */
+  var sampleBtn = document.getElementById("sampleBtn");
+  if (sampleBtn) {
+    sampleBtn.addEventListener("click", function () {
+      var records = makeSampleFiles();
+      var stats = computeStats(records);
+      stats.pleaBargain = computePleaBargain(records, 2);
+      currentStats = stats;
+      currentSample = true;
+      setStatus("");
+      render(stats);
+    });
+  }
 
   input.addEventListener("change", function () {
     if (!input.files || input.files.length === 0) return;
@@ -910,6 +1031,7 @@ function initDemo() {
     var stats = computeStats(records);
     stats.pleaBargain = computePleaBargain(records, 2);
     currentStats = stats;
+    currentSample = false;
     setStatus("");
     render(stats);
   }
@@ -939,6 +1061,8 @@ function initDemo() {
       return;
     }
     noEvidence.hidden = true;
+    var banner = document.getElementById("sampleBanner");
+    if (banner) banner.hidden = !currentSample;
     document.getElementById("verdictTier").textContent = stats.tier;
     document.getElementById("verdictSummary").textContent =
       stats.count + " screenshots, " + stats.totalSizeHuman + " of evidence, spanning " +

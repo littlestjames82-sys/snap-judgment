@@ -34,6 +34,20 @@
   - 2025: 13 ████████████
   - 2026: 22 ████████████████████
 
+## Screenshot Heatmap
+
+Rows are weekdays, columns are hours 0-23.
+
+```
+Mon           ░  ░░ ░       
+Tue           ▒    ░        
+Wed            ░    ░       
+Thu             ▓ ▒░ ▒      
+Fri            ░ ▒░ ░       
+Sat          ▒░ ░           
+Sun          █░ ░ ▒░        
+```
+
 ## The Charges
 
 - **Desktop / landscape:** 35 (100.0%)

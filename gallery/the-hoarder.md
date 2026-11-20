@@ -23,6 +23,7 @@
 - **Longest daily streak:** 26 days
 - **Longest clean stretch:** 5 days (May 11, 2021 - May 15, 2021)
 - **Biggest burst:** 2 screenshots in 60 seconds
+- **Busiest hour window:** 3 screenshots in the hour from Apr 15, 2025 10:39
 - **Duplicate suspects:** 425 groups, 850 files
 - **Duplicate waste:** 240.9 MB
 - **Formats:** PNG 100%
@@ -40,6 +41,20 @@
   - 2024: 400 ██████████████████
   - 2025: 435 ████████████████████
   - 2026: 371 █████████████████
+
+## Screenshot Heatmap
+
+Rows are weekdays, columns are hours 0-23.
+
+```
+Mon ▒▓▒█▓▒▒▒▓▒▒▒█▒▓▒░▓▒▒▒▒▓█
+Tue ▒▒▓▒▓▒▓▒▒▒▓▒▓█▒█▒▒▒▓▓▓▒█
+Wed ▒▒▓▒░▒▓▒▒▓▓▓░▒█▒▓▒▓█▓▓▓░
+Thu ▓▒▒▓▒▓▒░▒▓▓▒▒▓▓▒▓▒▒▒▓█▓▓
+Fri ▓▒░▓▒▒▒▓▓▒▒▒▓█▒▒▓▒▓▒▓▒▒▒
+Sat ▓▓▓▓▒▓░▓▓▓█▓▒█▓█▓▓▓▒▒▓▒▒
+Sun ▓▒▒▒▒▓▓▒█▒▒▓██▓▒█▒█▒▓▒▒▓
+```
 
 ## The Charges
 
@@ -61,7 +76,7 @@
 - **The Archivist** - The oldest screenshot dates to Mar 1, 2020, over three years ago, and it is still here.
 - **Repeat Customer** - 850 files share an exact size and dimensions with a sibling. The same screenshot, taken again.
 - **Gigabyte Club** - The screenshots alone total 1.6 GB. The evidence locker needs a bigger room.
-- **Time Traveler** - The collection spans 6.7 years of screenshots.
+- **The Long Haul** - The collection spans 6.7 years of screenshots.
 - **Anniversary** - 19 screenshots fall on Apr 15, gathered across 5 different years. Some dates just attract evidence.
 - **Screenshot Streak** - 26 consecutive days with at least one screenshot.
 

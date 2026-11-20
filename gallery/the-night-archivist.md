@@ -23,6 +23,7 @@
 - **Longest daily streak:** 10 days
 - **Longest clean stretch:** 10 days (Sep 19, 2024 - Sep 28, 2024)
 - **Biggest burst:** 2 screenshots in 60 seconds
+- **Busiest hour window:** 3 screenshots in the hour from Nov 26, 2025 02:26
 - **Duplicate suspects:** 0 groups, 0 files
 - **Formats:** PNG 100%
 - **Screenshot season:** Summer (Jun-Aug) - 31.7%
@@ -36,6 +37,20 @@
   - 2024: 253 █████████████████
   - 2025: 291 ████████████████████
   - 2026: 211 ███████████████
+
+## Screenshot Heatmap
+
+Rows are weekdays, columns are hours 0-23.
+
+```
+Mon ░▒▒▒▓ ░░░░░░░░░░░░░░░░▒▓
+Tue ░▒▒▒▒ ░░▒░░░░░░░░░░ ░░▒▒
+Wed ▒▒█▒▒ ░░░░░░░░░░░ ░░ ░▒▒
+Thu ▒▒▒█▓ ░░░ ░░░░░ ░░░░░░░▓
+Fri ░░▒▒▒ ░░░░░░░░░░░░░░░░▒▓
+Sat ▒▓▒▒▒ ░░░░░░░░░░░░░░░░▒▓
+Sun ░░▓▒▒ ░░░░░░░░░░░░░░░░▓▓
+```
 
 ## The Charges
 

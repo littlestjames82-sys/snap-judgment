@@ -8,7 +8,12 @@
 <meta property="og:title" content="Snap Judgment: the browser demo">
 <meta property="og:description" content="Pick your screenshots folder and get a courtroom verdict, computed entirely on this page, on your machine.">
 <meta property="og:type" content="website">
-<meta property="og:image" content="assets/demo-card.png">
+<meta property="og:url" content="https://littlestjames82-sys.github.io/snap-judgment/demo.html">
+<meta property="og:image" content="https://littlestjames82-sys.github.io/snap-judgment/assets/demo-card.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Snap Judgment: the browser demo">
+<meta name="twitter:description" content="Pick your screenshots folder and get a courtroom verdict, computed entirely on this page, on your machine.">
+<meta name="twitter:image" content="https://littlestjames82-sys.github.io/snap-judgment/assets/demo-card.png">
 <style>
   :root { --paper:#fdfcf8; --ink:#1d1a16; --muted:#6f6a5e; --line:#d8d2c4; --gold:#8a6d1a; --accent:#b08d3c; --dark:#141210; }
   * { box-sizing: border-box; }
@@ -29,6 +34,13 @@
               font-family: Georgia, 'Times New Roman', serif; font-size: 22px; font-weight: bold;
               letter-spacing: .04em; padding: 18px 42px; border-radius: 999px; }
   #judgeBtn:hover { background: var(--gold); }
+  #sampleBtn { background: var(--paper); color: var(--ink); border: 1.5px solid var(--ink); cursor: pointer;
+               font-family: Georgia, 'Times New Roman', serif; font-size: 16px;
+               padding: 11px 24px; border-radius: 999px; margin-top: 12px; }
+  #sampleBtn:hover { border-color: var(--gold); color: var(--gold); }
+  .sample-banner { border: 2px solid var(--gold); border-radius: 8px; padding: 10px 16px;
+                   margin: 26px 0 0; font-size: 15.5px; line-height: 1.55; }
+  .sample-banner b { color: var(--gold); letter-spacing: .06em; }
   #status { text-align: center; color: var(--muted); min-height: 24px; font-size: 15px; margin: 10px 0 0; }
   .fineprint { text-align: center; color: var(--muted); font-size: 13.5px; margin-top: 8px; }
   h2.verdict { font-size: 25px; margin: 38px 0 6px; border-bottom: 1px solid var(--line); padding-bottom: 6px;
@@ -94,6 +106,8 @@ share card you can download. No install, no account, no waiting.</p>
 
 <div class="judge-wrap">
   <button id="judgeBtn" type="button">Judge my folder</button>
+  <br>
+  <button id="sampleBtn" type="button">See a sample verdict</button>
   <p id="status" role="status"></p>
   <p class="fineprint">Works best in Chrome or Edge, which open a folder picker. In Firefox or Safari the
   same button opens a folder upload control instead. You can also drop a folder anywhere on this page.
@@ -107,6 +121,7 @@ share card you can download. No install, no account, no waiting.</p>
 </div>
 
 <section id="result" hidden>
+  <p id="sampleBanner" class="sample-banner" hidden><b>SAMPLE DEFENDANT.</b> Sample defendant (synthetic folder) — judge your own folder for a real verdict.</p>
   <div class="judge-bar" role="group" aria-label="Presiding judge">
     <span class="judge-label">Presiding judge</span>
     <button type="button" class="judge-btn" data-voice="strict">Strict</button>

@@ -23,6 +23,7 @@
 - **Longest daily streak:** 3 days
 - **Longest clean stretch:** 21 days (Jan 10, 2025 - Jan 30, 2025)
 - **Biggest burst:** 12 screenshots in 60 seconds
+- **Busiest hour window:** 13 screenshots in the hour from Nov 9, 2026 05:42
 - **Duplicate suspects:** 0 groups, 0 files
 - **Formats:** PNG 100%
 - **Screenshot season:** Summer (Jun-Aug) - 29.6%
@@ -33,6 +34,20 @@
 - **Screenshots per year:**
   - 2025: 216 ██████████████████
   - 2026: 234 ████████████████████
+
+## Screenshot Heatmap
+
+Rows are weekdays, columns are hours 0-23.
+
+```
+Mon  ░░░░█░░░░░░░     ░ ░░▓░
+Tue ▓▓░▓ ░░ ░░░█    ░ ░  ░▓█
+Wed ░▓░ ░░░ █░  ▓ ░░ ░ ░▓░░░
+Thu ░   ░ ▓░░▓   ░░░▓ ░░░░░ 
+Fri ░    ░▓ ▓░▓  ▓░░░░▓░░░░░
+Sat  ░▓ ░ ░▓░ ░░     ░ ░░ ░░
+Sun ░ ░░░▓ ░░░   ░░ ░  ▓░░▓░
+```
 
 ## The Charges
 

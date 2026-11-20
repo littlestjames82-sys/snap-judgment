@@ -4,6 +4,27 @@ All notable changes to Snap Judgment are recorded here. Versions are the
 tool's own; the record is the record. Every version below shipped on
 November 19, 2026 - it was that kind of day in court.
 
+## 0.7.0 - 2026-11-19
+
+- Configuration file: a `.snapjudgment.toml` in the current directory
+  (or, when exactly one folder is given, inside that folder; the
+  current directory wins) can supply `folders`, `judge`, `judge_file`,
+  `plea_years`, `fail_above`, and `all`. Command-line flags always
+  override the file. Parsing uses `tomllib` where it exists
+  (Python 3.11+) and a small built-in parser for the flat subset of
+  TOML on 3.9/3.10. A config file that cannot be parsed, names an
+  unknown judge or tier, or points at a judge pack that does not load
+  is warned about on stderr and ignored as a whole - a config file
+  must never break a run.
+- Shell completions: `completions/snapjudgment.bash` and
+  `completions/snapjudgment.zsh` complete every flag (with judge
+  voices and verdict tiers as values where they belong). A test keeps
+  the bash file honest against `--help`, so the two cannot drift.
+- The gallery is regenerated with the current report format: heatmaps
+  and the newer evidence lines are in, and The Hoarder's span award
+  now reads The Long Haul, as the 0.6.0 rename intended. No verdict
+  changed; the defendants' records stand.
+
 ## 0.6.0 - 2026-11-19
 
 - `--plea-bargain`: the court hears a plea. It computes the hypothetical

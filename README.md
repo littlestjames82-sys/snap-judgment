@@ -108,6 +108,44 @@ complete example, **The Poet**, ships at `examples/judge-poet.json`. With
 `--json`, the report's `judge` field carries the pack's name. A malformed
 pack exits with code 2 and a plain message.
 
+### Configuration file
+
+Options you reach for every time can live in a `.snapjudgment.toml`.
+Snap Judgment looks for one in the current directory first; when exactly
+one folder is given and the current directory has none, a config file
+inside that folder applies. Command-line flags always override the file.
+
+```toml
+# .snapjudgment.toml
+folders = ["~/Pictures/Screenshots"]
+judge = "strict"
+plea_years = 3
+fail_above = "Repeat Offender"
+all = false
+```
+
+The supported keys are `folders` (a list of paths, used when no folder
+argument is given), `judge` (`strict` | `fair` | `lenient`),
+`judge_file` (a custom judge pack, as with `--judge-file`),
+`plea_years` (an integer), `fail_above` (a verdict tier name), and
+`all` (a boolean). Python 3.11+ parses the file with `tomllib`; on
+3.9/3.10 a small built-in parser reads the same flat subset of TOML
+(top-level `key = value` lines). A config file that cannot be parsed,
+names an unknown judge or tier, or points at a judge pack that does not
+load is warned about on stderr and ignored as a whole: a config file
+must never break a run.
+
+### Shell completions
+
+Completion scripts for bash and zsh live in
+[`completions/`](completions/): they complete every flag, with judge
+voices for `--judge` and verdict tiers for `--fail-above`. For bash,
+copy `completions/snapjudgment.bash` into your bash-completion
+directory (e.g. `~/.local/share/bash-completion/completions/snapjudgment`)
+or source it from `~/.bashrc`. For zsh, copy
+`completions/snapjudgment.zsh` as `_snapjudgment` into a directory on
+your `$fpath` and run `compinit`.
+
 ### Year over year
 
 `--vs-year 2026` compares one year against the most recent year present in

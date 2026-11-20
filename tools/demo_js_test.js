@@ -327,4 +327,69 @@ check("judge sentences port the Python voices exactly", () => {
   assert.strictEqual(demo.tierRank("Repeat Offender"), 2);
 });
 
+/* --- the sample defendant ------------------------------------------------- */
+
+check("sample dataset: 340 synthetic screenshots, deterministic, Repeat Offender", () => {
+  const files = demo.makeSampleFiles();
+  assert.strictEqual(files.length, 340);
+  files.forEach(f => {
+    assert.strictEqual(typeof f.name, "string");
+    assert.strictEqual(typeof f.size, "number");
+    assert.strictEqual(typeof f.mtime, "number");
+    assert.strictEqual(typeof f.width, "number");
+    assert.strictEqual(typeof f.height, "number");
+  });
+  /* Two dimension pairs only: phone and desktop. */
+  const pairs = new Set(files.map(f => f.width + "x" + f.height));
+  assert.deepStrictEqual([...pairs].sort(), ["1170x2532", "1920x1080"]);
+  /* Same seed, same folder, byte for byte at a fixed clock. */
+  const a = demo.makeSampleFiles(1760000000000);
+  const b = demo.makeSampleFiles(1760000000000);
+  assert.deepStrictEqual(a, b);
+  /* The verdict lands in the expected band, night-heavy by design. */
+  const s = demo.computeStats(files);
+  assert.strictEqual(s.tier, "Repeat Offender");
+  assert.ok(s.nightShare >= 30, "sample night share is " + s.nightShare);
+  assert.ok(s.awards.some(x => x.name === "Night Owl"));
+  assert.ok(s.awards.some(x => x.name === "Time Traveler"));  /* the future file */
+  assert.ok(s.awards.some(x => x.name === "Burst Mode"));     /* the burst cluster */
+  assert.ok(s.awards.some(x => x.name === "Repeat Customer")); /* the duplicate group */
+});
+
+/* --- share text with a plea bargain --------------------------------------- */
+
+check("share text gains the plea line when the plea improves the tier", () => {
+  const files = [];
+  for (let i = 0; i < 30; i++) {
+    files.push(shot({ size: 2000 + i, mtime: ts(2026, 4, 1, 12) }));
+  }
+  for (let i = 0; i < 10; i++) {
+    files.push(shot({ size: 100, width: null, height: null, mtime: ts(2023, 0, 15, 12) }));
+  }
+  for (let i = 0; i < 12; i++) {
+    files.push(shot({ size: 777, width: 100, height: 100, mtime: ts(2026, 4, 2, 12) }));
+  }
+  const s = demo.computeStats(files);
+  s.pleaBargain = demo.computePleaBargain(files, 2);
+  const post = demo.verdictPostText(s);
+  assert.ok(post.includes(
+    "The plea bargain: delete 21 screenshots (duplicates and older than 2 years) " +
+    "and the verdict drops to Innocent Bystander."));
+  assert.ok(post.includes("https://littlestjames82-sys.github.io/snap-judgment/demo.html"));
+});
+
+check("share text gains the stands line when the plea changes nothing", () => {
+  const files = [];
+  for (let i = 0; i < 10; i++) {
+    files.push(shot({ size: 3000 + i, width: null, height: null, mtime: ts(2026, 5, 1, 12) }));
+  }
+  const s = demo.computeStats(files);
+  s.pleaBargain = demo.computePleaBargain(files, 2);
+  const post = demo.verdictPostText(s);
+  assert.ok(post.includes("The plea bargain changes nothing. The verdict stands."));
+  /* And with no plea computed at all, the text carries no plea line. */
+  const bare = demo.verdictPostText(demo.computeStats(files));
+  assert.ok(!bare.includes("plea bargain"));
+});
+
 console.log("\n" + passed + " test groups passed.");

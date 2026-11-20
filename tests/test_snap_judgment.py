@@ -8,6 +8,7 @@ import csv
 import io
 import json
 import os
+import re
 import struct
 import sys
 import tempfile
@@ -2711,6 +2712,219 @@ class CardInstallLineTests(TempDirCase):
         second = sj.render_png(stats, tier, sentence, awards)
         self.assertEqual(first, second)
         self.assertTrue(first.startswith(b"\x89PNG\r\n\x1a\n"))
+
+
+# ---------------------------------------------------------------------------
+# config file (v0.7.0)
+# ---------------------------------------------------------------------------
+
+class ConfigTests(TempDirCase):
+    def setUp(self):
+        super().setUp()
+        self._old_cwd = os.getcwd()
+        self.work = self.root / "work"  # stands in for the current directory
+        self.work.mkdir()
+        self.shots = self.root / "shots"
+        self.shots.mkdir()
+
+    def tearDown(self):
+        os.chdir(self._old_cwd)
+        super().tearDown()
+
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = sj.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def seed(self, folder, n=3, when=None):
+        when = when or datetime(2026, 6, 1, 12, 0)
+        for i in range(n):
+            write_file(folder, f"screenshot_{i}.png", make_png(100, 100),
+                       when + timedelta(days=i))
+
+    def write_config(self, folder, text):
+        (Path(folder) / ".snapjudgment.toml").write_text(
+            text, encoding="utf-8"
+        )
+
+    def test_config_supplies_folders_and_judge(self):
+        self.seed(self.shots)
+        self.write_config(
+            self.work,
+            f'folders = ["{self.shots}"]\njudge = "strict"\n',
+        )
+        os.chdir(self.work)
+        code, out, _ = self.run_main(["--json"])
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual(data["count"], 3)
+        self.assertEqual(data["judge"], "strict")
+
+    def test_cli_overrides_config(self):
+        self.seed(self.shots, n=3)
+        other = self.root / "other"
+        other.mkdir()
+        self.seed(other, n=5)
+        self.write_config(
+            self.work,
+            f'folders = ["{self.shots}"]\njudge = "strict"\n',
+        )
+        os.chdir(self.work)
+        code, out, _ = self.run_main(
+            [str(other), "--judge", "lenient", "--json"]
+        )
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual(data["count"], 5)  # the CLI folder, not the config's
+        self.assertEqual(data["judge"], "lenient")  # the CLI judge wins
+
+    def test_malformed_config_warns_and_run_succeeds(self):
+        self.seed(self.shots)
+        self.write_config(self.work, "this is not [ toml\n")
+        os.chdir(self.work)
+        code, out, err = self.run_main([str(self.shots), "--json"])
+        self.assertEqual(code, 0)
+        self.assertIn("warning", err)
+        self.assertIn(".snapjudgment.toml", err)
+        self.assertEqual(json.loads(out)["count"], 3)
+
+    def test_unknown_judge_in_config_warns_and_run_succeeds(self):
+        self.seed(self.shots)
+        self.write_config(self.work, 'judge = "grumpy"\n')
+        os.chdir(self.work)
+        code, out, err = self.run_main([str(self.shots), "--json"])
+        self.assertEqual(code, 0)
+        self.assertIn("warning", err)
+        self.assertEqual(json.loads(out)["judge"], "fair")
+
+    def test_config_in_judged_folder_is_found(self):
+        self.seed(self.shots)
+        self.write_config(self.shots, 'judge = "lenient"\n')
+        os.chdir(self.work)  # the working directory has no config of its own
+        code, out, _ = self.run_main([str(self.shots), "--json"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["judge"], "lenient")
+
+    def test_cwd_config_wins_over_folder_config(self):
+        self.seed(self.shots)
+        self.write_config(self.work, 'judge = "strict"\n')
+        self.write_config(self.shots, 'judge = "lenient"\n')
+        os.chdir(self.work)
+        code, out, _ = self.run_main([str(self.shots), "--json"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["judge"], "strict")
+
+    def test_folder_config_ignored_with_two_folders(self):
+        self.seed(self.shots)
+        other = self.root / "other"
+        other.mkdir()
+        self.seed(other, n=2)
+        self.write_config(self.shots, 'judge = "lenient"\n')
+        os.chdir(self.work)
+        code, out, _ = self.run_main(
+            [str(self.shots), str(other), "--json"]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["judge"], "fair")
+
+    def test_config_judge_file(self):
+        self.seed(self.shots)
+        pack = self.work / "pack.json"
+        pack.write_text(
+            json.dumps({"name": "The Test Judge", "sentences": {}}),
+            encoding="utf-8",
+        )
+        self.write_config(self.work, f'judge_file = "{pack}"\n')
+        os.chdir(self.work)
+        code, out, _ = self.run_main([str(self.shots), "--json"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["judge"], "The Test Judge")
+
+    def test_config_missing_judge_file_warns_and_run_succeeds(self):
+        self.seed(self.shots)
+        self.write_config(
+            self.work, f'judge_file = "{self.work}/no-such-pack.json"\n'
+        )
+        os.chdir(self.work)
+        code, out, err = self.run_main([str(self.shots), "--json"])
+        self.assertEqual(code, 0)
+        self.assertIn("warning", err)
+        self.assertEqual(json.loads(out)["judge"], "fair")
+
+    def test_config_plea_years(self):
+        self.seed(self.shots)
+        self.write_config(self.work, "plea_years = 5\n")
+        os.chdir(self.work)
+        code, out, _ = self.run_main(
+            [str(self.shots), "--plea-bargain", "--json"]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["plea_bargain"]["years"], 5)
+
+    def test_config_fail_above(self):
+        self.seed(self.shots, n=60)  # Petty Offender, above Innocent Bystander
+        self.write_config(self.work, 'fail_above = "Innocent Bystander"\n')
+        os.chdir(self.work)
+        code, _, _ = self.run_main([str(self.shots), "--json"])
+        self.assertEqual(code, 1)
+
+    def test_config_all(self):
+        # files that are images but not recognizably screenshots
+        for i in range(3):
+            write_file(self.shots, f"photo_{i}.png", make_png(100, 100),
+                       datetime(2026, 6, 1, 12, 0) + timedelta(days=i))
+        os.chdir(self.work)
+        code, _, _ = self.run_main([str(self.shots), "--json"])
+        self.assertEqual(code, 2)  # nothing the court recognizes
+        self.write_config(self.work, "all = true\n")
+        code, out, _ = self.run_main([str(self.shots), "--json"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["count"], 3)
+
+
+class FlatTomlTests(unittest.TestCase):
+    """The fallback parser used on Python 3.9/3.10 (no tomllib)."""
+
+    def test_flat_subset(self):
+        data = sj.parse_flat_toml(
+            "# a comment\n"
+            'judge = "strict" # trailing comment\n'
+            "plea_years = 5\n"
+            "all = true\n"
+            "folders = [\"/a/b\", '/c']\n"
+            'fail_above = "Repeat Offender"\n'
+        )
+        self.assertEqual(data["judge"], "strict")
+        self.assertEqual(data["plea_years"], 5)
+        self.assertIs(data["all"], True)
+        self.assertEqual(data["folders"], ["/a/b", "/c"])
+        self.assertEqual(data["fail_above"], "Repeat Offender")
+
+    def test_flat_parser_rejects_garbage(self):
+        with self.assertRaises(ValueError):
+            sj.parse_flat_toml("this is not toml\n")
+
+    def test_flat_parser_ignores_tables(self):
+        data = sj.parse_flat_toml('[other]\njudge = "strict"\n')
+        self.assertEqual(data, {})
+
+
+# ---------------------------------------------------------------------------
+# shell completions (v0.7.0)
+# ---------------------------------------------------------------------------
+
+class CompletionTests(unittest.TestCase):
+    def test_bash_completion_covers_every_long_flag(self):
+        repo = Path(__file__).resolve().parent.parent
+        bash = (repo / "completions" / "snapjudgment.bash").read_text(
+            encoding="utf-8"
+        )
+        flags = set(re.findall(r"--[a-z][a-z0-9-]*",
+                               sj.build_parser().format_help()))
+        self.assertGreater(len(flags), 15)
+        for flag in sorted(flags):
+            self.assertIn(flag, bash)
 
 
 if __name__ == "__main__":

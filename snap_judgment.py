@@ -40,7 +40,12 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from xml.sax.saxutils import escape as _xml_escape
 
-__version__ = "0.6.0"
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.9 and 3.10 have no tomllib
+    tomllib = None
+
+__version__ = "0.7.0"
 
 # ---------------------------------------------------------------------------
 # detection
@@ -2370,6 +2375,253 @@ def _parse_filter_date(raw: str, flag: str, is_until: bool) -> date:
         )
 
 
+# ---------------------------------------------------------------------------
+# configuration file (.snapjudgment.toml)
+# ---------------------------------------------------------------------------
+
+CONFIG_FILENAME = ".snapjudgment.toml"
+
+
+def find_config_path(folder_args):
+    """The config file in force, or None.
+
+    The current directory wins; failing that, when exactly one folder
+    was given on the command line, a config file inside that folder
+    applies.
+    """
+    cwd_candidate = Path.cwd() / CONFIG_FILENAME
+    if cwd_candidate.is_file():
+        return cwd_candidate
+    if len(folder_args) == 1:
+        folder_candidate = Path(folder_args[0]).expanduser() / CONFIG_FILENAME
+        if folder_candidate.is_file():
+            return folder_candidate
+    return None
+
+
+def _strip_toml_comment(line: str) -> str:
+    """Remove a trailing # comment, honoring quoted strings."""
+    quote = None
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote is not None:
+            if quote == '"' and ch == "\\":
+                i += 1  # skip the escaped character
+            elif ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "#":
+            return line[:i]
+        i += 1
+    return line
+
+
+def _flat_toml_string(raw: str) -> str:
+    quote = raw[0]
+    if len(raw) < 2 or raw[-1] != quote or quote in raw[1:-1]:
+        raise ValueError(f"malformed string: {raw!r}")
+    return raw[1:-1]
+
+
+def _split_flat_list(inner: str) -> list:
+    parts = []
+    buf = []
+    quote = None
+    for ch in inner:
+        if quote is not None:
+            buf.append(ch)
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+            buf.append(ch)
+        elif ch == ",":
+            parts.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    if quote is not None:
+        raise ValueError("unterminated string in list")
+    parts.append("".join(buf))
+    return parts
+
+
+def _flat_toml_value(raw: str):
+    """One value of the flat config subset: a string, an integer, a
+    boolean, or a list of strings. Raises ValueError on anything else."""
+    raw = raw.strip()
+    if not raw:
+        raise ValueError("missing value")
+    if raw[0] in "\"'":
+        return _flat_toml_string(raw)
+    if raw == "true":
+        return True
+    if raw == "false":
+        return False
+    if raw[0] == "[":
+        if not raw.endswith("]"):
+            raise ValueError(f"malformed list: {raw!r}")
+        inner = raw[1:-1].strip()
+        if not inner:
+            return []
+        values = []
+        for part in _split_flat_list(inner):
+            value = _flat_toml_value(part)
+            if not isinstance(value, str):
+                raise ValueError("config lists hold strings only")
+            values.append(value)
+        return values
+    if re.fullmatch(r"[+-]?\d[\d_]*", raw):
+        return int(raw.replace("_", ""))
+    raise ValueError(f"unsupported value: {raw!r}")
+
+
+def parse_flat_toml(text: str) -> dict:
+    """A tolerant parser for the flat subset of TOML the config file
+    uses, for Python 3.9/3.10 where tomllib does not exist. Only
+    top-level `key = value` lines are read; tables and anything fancier
+    are ignored. Raises ValueError on lines it cannot make sense of
+    at all, so a garbled file is still reported as invalid.
+    """
+    data = {}
+    in_table = False
+    for raw_line in text.splitlines():
+        line = _strip_toml_comment(raw_line).strip()
+        if not line:
+            continue
+        if line.startswith("["):
+            in_table = True  # keys under a table are not ours to read
+            continue
+        if in_table:
+            continue
+        if "=" not in line:
+            raise ValueError(f"cannot parse line: {raw_line.strip()!r}")
+        key, _, raw_value = line.partition("=")
+        key = key.strip()
+        if not key:
+            raise ValueError(f"cannot parse line: {raw_line.strip()!r}")
+        data[key] = _flat_toml_value(raw_value)
+    return data
+
+
+def read_config(path):
+    """Parse a config file into a dict, or None when it is not valid."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if tomllib is not None:
+        try:
+            data = tomllib.loads(text)
+        except ValueError:  # tomllib.TOMLDecodeError
+            return None
+    else:
+        try:
+            data = parse_flat_toml(text)
+        except ValueError:
+            return None
+    return data if isinstance(data, dict) else None
+
+
+def _config_warning(path, reason):
+    print(
+        f"snapjudgment: warning: ignoring config file {path}: {reason}",
+        file=sys.stderr,
+    )
+
+
+def load_config(folder_args, validate_judge_file=True):
+    """The validated contents of the config file in force, as a dict.
+
+    A config file that cannot be parsed, names an unknown judge or
+    fail-above tier, or points at a judge pack that does not load is
+    warned about and ignored as a whole: a config file must never
+    break a run. Individual keys with values of the wrong type are
+    skipped later, when applied.
+    """
+    path = find_config_path(folder_args)
+    if path is None:
+        return {}
+    data = read_config(path)
+    if data is None:
+        _config_warning(path, "not valid TOML")
+        return {}
+    judge = data.get("judge")
+    if judge is not None and judge not in VOICES:
+        _config_warning(path, f"unknown judge: {judge!r}")
+        return {}
+    fail_above = data.get("fail_above")
+    if fail_above is not None and (
+        not isinstance(fail_above, str)
+        or _normalize_tier_name(fail_above) not in TIER_RANKS
+    ):
+        _config_warning(path, f"unknown tier for fail_above: {fail_above!r}")
+        return {}
+    judge_file = data.get("judge_file")
+    if validate_judge_file and isinstance(judge_file, str):
+        try:
+            load_judge_pack(Path(judge_file).expanduser())
+        except SnapError as exc:
+            _config_warning(path, str(exc))
+            return {}
+    return data
+
+
+def explicitly_set(argv):
+    """Names of the options actually typed on the command line.
+
+    Parses argv a second time against a twin of the real parser with
+    every default suppressed, so only provided options appear. main()
+    has already parsed argv successfully before this runs, so the twin
+    parse cannot fail on user input.
+    """
+    parser = build_parser()
+    for action in parser._actions:
+        action.default = argparse.SUPPRESS
+    namespace = argparse.Namespace()
+    parser.parse_args(argv, namespace)
+    return set(vars(namespace))
+
+
+def apply_config(args, explicit):
+    """Fill options the command line left unset from the config file.
+
+    Command-line flags always win; the config only supplies values for
+    options that were not typed. Supported keys: folders, judge,
+    judge_file, plea_years, fail_above, all.
+    """
+    data = load_config(
+        args.folders, validate_judge_file="judge_file" not in explicit
+    )
+    if not data:
+        return
+    folders = data.get("folders")
+    if not args.folders and isinstance(folders, list) and all(
+        isinstance(item, str) for item in folders
+    ):
+        args.folders = list(folders)
+    if "judge" not in explicit and "judge" in data:
+        args.judge = data["judge"]
+    if "judge_file" not in explicit and isinstance(
+        data.get("judge_file"), str
+    ):
+        args.judge_file = data["judge_file"]
+    plea_years = data.get("plea_years")
+    if (
+        "plea_years" not in explicit
+        and isinstance(plea_years, int)
+        and not isinstance(plea_years, bool)
+        and plea_years >= 0
+    ):
+        args.plea_years = plea_years
+    if "fail_above" not in explicit and "fail_above" in data:
+        args.fail_above = data["fail_above"]
+    if "all" not in explicit and isinstance(data.get("all"), bool):
+        args.all = data["all"]
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="snapjudgment",
@@ -2461,6 +2713,9 @@ def main(argv=None) -> int:
             return 2
         print(render_history(records))
         return 0
+
+    explicit = explicitly_set(sys.argv[1:] if argv is None else argv)
+    apply_config(args, explicit)
 
     since_year = None
     since_date = None

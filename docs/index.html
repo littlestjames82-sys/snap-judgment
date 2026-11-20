@@ -6,9 +6,14 @@
 <title>Snap Judgment: Your screenshots, reviewed</title>
 <meta name="description" content="Snap Judgment reads a folder of screenshots and issues a courtroom-style verdict on your screenshot habits, computed from file metadata only. It never decodes image pixels and never uploads anything. pip install snap-judgment">
 <meta property="og:title" content="Snap Judgment: a courtroom verdict on your screenshot habits">
-<meta property="og:description" content="Seven verdict tiers, the evidence, 14 awards, and a sentence. Local only, metadata only, no pixels read.">
+<meta property="og:description" content="A courtroom verdict on your screenshots folder: seven tiers, the evidence, 16 awards, and a sentence, computed locally from file metadata only.">
 <meta property="og:type" content="website">
-<meta property="og:image" content="assets/demo-card.png">
+<meta property="og:url" content="https://littlestjames82-sys.github.io/snap-judgment/">
+<meta property="og:image" content="https://littlestjames82-sys.github.io/snap-judgment/assets/demo-card.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Snap Judgment: a courtroom verdict on your screenshot habits">
+<meta name="twitter:description" content="A courtroom verdict on your screenshots folder: seven tiers, the evidence, 16 awards, and a sentence, computed locally from file metadata only.">
+<meta name="twitter:image" content="https://littlestjames82-sys.github.io/snap-judgment/assets/demo-card.png">
 <style>
   :root { --paper:#fdfcf8; --ink:#1d1a16; --muted:#6f6a5e; --line:#d8d2c4; --gold:#8a6d1a; --accent:#b08d3c; --dark:#141210; }
   * { box-sizing: border-box; }
@@ -30,6 +35,10 @@
   .cta a.primary { background: var(--ink); color: var(--paper); }
   img.demo { width: 100%; border: 1px solid var(--line); border-radius: 8px; margin: 20px 0 4px; }
   .caption { color: var(--muted); font-size: 13.5px; text-align:center; margin: 2px 0 10px; }
+  .locker { display:grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 16px 0 6px; }
+  .locker figure { margin: 0; }
+  .locker img { width: 100%; border: 1px solid var(--line); border-radius: 8px; display:block; }
+  @media (max-width: 640px) { .locker { grid-template-columns: 1fr; } }
   h2 { font-size: 25px; margin: 38px 0 6px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
   p, li { font-size: 16.5px; line-height: 1.6; }
   table.tiers { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 16px; }
@@ -98,6 +107,7 @@ your screenshot season, your screenshot anniversary, and the device eras told by
 Your five oldest screenshots are entered as Exhibit A through Exhibit E.</p>
 
 <h2>The awards</h2>
+<p>Sixteen awards are on the books. Most hearings earn a few; the court pins every one the evidence supports.</p>
 <div class="awards">
   <div class="award"><b>Night Owl</b><span>A quarter or more of your screenshots happen between 10 PM and 5 AM.</span></div>
   <div class="award"><b>The 3 AM Club</b><span>10 or more screenshots between 2 AM and 4 AM, when nothing on screen can be urgent.</span></div>
@@ -107,8 +117,10 @@ Your five oldest screenshots are entered as Exhibit A through Exhibit E.</p>
   <div class="award"><b>Repeat Customer</b><span>10 or more files are exact duplicates of a sibling. The same screenshot, taken again.</span></div>
   <div class="award"><b>Creature of Habit</b><span>A quarter or more of your screenshots fall in a single hour of the day.</span></div>
   <div class="award"><b>Gigabyte Club</b><span>A gigabyte or more of evidence.</span></div>
-  <div class="award"><b>Time Traveler</b><span>The collection spans 4 or more years.</span></div>
+  <div class="award"><b>Time Traveler</b><span>At least one screenshot is dated in the future. The court admits it anyway.</span></div>
+  <div class="award"><b>The Long Haul</b><span>The collection spans 4 or more years.</span></div>
   <div class="award"><b>Lifer</b><span>The collection spans 8 or more years.</span></div>
+  <div class="award"><b>Ancient Relic</b><span>The oldest screenshot sits 10 or more years before the newest.</span></div>
   <div class="award"><b>Anniversary</b><span>One month-day accounts for 15 or more screenshots across the years.</span></div>
   <div class="award"><b>Screenshot Streak</b><span>7 or more consecutive days with at least one screenshot.</span></div>
   <div class="award"><b>Clean Stretch</b><span>30 or more days without a single screenshot. A recorded moment of restraint.</span></div>
@@ -120,10 +132,15 @@ Your five oldest screenshots are entered as Exhibit A through Exhibit E.</p>
   <li><b>Three presiding judges</b> (strict, fair, lenient) plus loadable <b>judge packs</b>: The Poet, The Drill Sergeant, The Grandmother. The voice changes the wording, never the math.</li>
   <li><b>The charges</b>: a census of where your screenshots came from. Android filenames that carry an app are credited to it; everything else is classified by form factor.</li>
   <li><b>Co-defendant mode</b> (<code>--vs</code>) tries two folders against each other; <b>year over year</b> (<code>--vs-year</code>) tries this year against the last.</li>
+  <li><b>The plea bargain</b> (<code>--plea-bargain</code>): the hypothetical verdict if you deleted your duplicate extras and everything older than two years, computed in full. The court runs the numbers; it never deletes a thing.</li>
+  <li><b>Rematch mode</b> (<code>--rematch</code>) tries this hearing against the last one on record for the same folders: the count delta, and whether the verdict improved, worsened, or held.</li>
+  <li><b>Date filters</b> (<code>--since</code>, <code>--until</code>) narrow a hearing to a date range, inclusive, and compose with <code>--year</code>. A bare year works too.</li>
   <li><b>A wrapped kit</b> for your year in screenshots: a share card and ready-to-post drafts built from your own numbers.</li>
-  <li><b>Share cards</b> as PNG, SVG, or HTML, a full HTML report, Markdown, JSON, CSV, and a one-line mode for scripts.</li>
+  <li><b>Share cards</b> as PNG, SVG, or HTML, a full HTML report, Markdown, JSON, CSV, and a one-line mode for scripts. The Markdown and HTML reports also draw an <b>hour-by-weekday heatmap</b> of the whole collection.</li>
+  <li><b>A verdict badge</b> (<code>--badge</code>): a shields-style SVG of your tier, colored by severity, made for your README.</li>
   <li><b>The court record</b>: every hearing is remembered, and repeat hearings report whether the collection is up or down.</li>
   <li><b>A GitHub Action</b> and <code>--fail-above</code>, so a verdict can fail a CI build.</li>
+  <li>Defaults can live in a <b>config file</b>, and shell completions ship for the terminal.</li>
 </ul>
 
 <h2>Meet the defendants</h2>
@@ -193,6 +210,30 @@ AWARDS
 THE SENTENCE
   Sentence: probation. The screenshots folder gets a check-in once a month.</pre>
 <p class="caption">From a synthetic demo folder of 310 screenshots. Your folder's testimony will differ.</p>
+
+<h2>The evidence locker</h2>
+<p>Every exhibit below was drawn by the tool's own standard-library renderer from that same demo
+folder's numbers: no image library, no mockups. The full set, including an MP4 of the demo and
+the author's own real verdict card, lives in the
+<a href="https://github.com/littlestjames82-sys/snap-judgment/tree/main/examples/media">media pack in the repo</a>.</p>
+<div class="locker">
+  <figure>
+    <img loading="lazy" src="assets/verdict-ladder.png" alt="The six Snap Judgment verdict tiers as a ladder, colored by severity: Innocent Bystander at 1 to 49 screenshots up to Unrepentant Screenshot Felon at 2,500 or more">
+    <p class="caption">The verdicts: six tiers, colored by severity.</p>
+  </figure>
+  <figure>
+    <img loading="lazy" src="assets/awards-grid.png" alt="All sixteen Snap Judgment awards in a 4 by 4 grid, each with a short description">
+    <p class="caption">The awards: all sixteen honors the court may bestow.</p>
+  </figure>
+  <figure>
+    <img loading="lazy" src="assets/heatmap.png" alt="Heatmap of the demo folder's screenshots by weekday and hour; the peak cell is Friday at 9 PM with 12 screenshots">
+    <p class="caption">When the defendant strikes: the demo folder peaks Friday at 9 PM, which is where its burst of 12 lives.</p>
+  </figure>
+  <figure>
+    <img loading="lazy" src="assets/verdict-reveal.gif" alt="Animated share card assembling itself piece by piece, ending with the verdict Repeat Offender stamping in">
+    <p class="caption">The verdict, delivered: the share card assembles itself and the gavel falls.</p>
+  </figure>
+</div>
 
 <div class="notice"><b>METADATA ONLY.</b> Snap Judgment reads file names, sizes, modification times, and image header bytes (for width and height). It never decodes a pixel, never runs OCR, and never uploads anything. What your screenshots show is your business; how many there are is the court's.</div>
 

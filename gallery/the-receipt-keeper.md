@@ -34,6 +34,20 @@
   - 2025: 113 ████████████████████
   - 2026: 107 ███████████████████
 
+## Screenshot Heatmap
+
+Rows are weekdays, columns are hours 0-23.
+
+```
+Mon          ▒█░▒▒▒░░       
+Tue          ▒▓▒▒▒▒░░       
+Wed          ▓▒▒▒▒▒▓▓       
+Thu          █▒▓█▓▒▒█       
+Fri          █░░▒▒▒░▓       
+Sat                         
+Sun                         
+```
+
 ## The Charges
 
 - **Phone (tall):** 181 (82.3%)
