@@ -38,13 +38,33 @@
   table.evidence { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 16px; }
   table.evidence th, table.evidence td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; }
   table.evidence th { background: #f5f1e6; width: 42%; font-weight: normal; color: var(--muted); }
-  #awardsBox h3 { font-size: 20px; margin: 22px 0 4px; }
-  #awardsBox p { margin: 6px 0; }
+  #awardsBox h3, #exhibitsBox h3, #heatmapBox h3, #pleaBox h3 { font-size: 20px; margin: 22px 0 4px; }
+  #awardsBox p, #exhibitsBox p { margin: 6px 0; }
+  .judge-bar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin: 30px 0 0; }
+  .judge-bar .judge-label { color: var(--muted); font-size: 14px; letter-spacing: .12em; text-transform: uppercase; margin-right: 4px; }
+  .judge-btn { border: 1.5px solid var(--ink); background: var(--paper); color: var(--ink); cursor: pointer;
+               font-family: Georgia, 'Times New Roman', serif; padding: 7px 15px; border-radius: 999px; font-size: 14.5px; }
+  .judge-btn.active { background: var(--ink); color: var(--paper); }
+  #judgeName { font-size: 15px; color: var(--muted); font-style: italic; margin: 10px 0 0; }
+  #sentenceLine { font-size: 19px; font-style: italic; margin: 10px 0 4px; }
+  .heatmap-note { color: var(--muted); font-size: 14px; margin: 2px 0 8px; }
+  table.heatmap { border-collapse: collapse; width: 100%; }
+  table.heatmap th { font-size: 10.5px; color: var(--muted); font-weight: normal; padding: 2px 0; text-align: center; }
+  table.heatmap th:first-child { text-align: right; padding-right: 6px; font-size: 12px; }
+  table.heatmap td { height: 17px; border: 1px solid var(--paper); padding: 0; }
+  .plea-closing { font-weight: bold; margin: 10px 0 0; }
   canvas#card { width: 100%; height: auto; border-radius: 8px; margin: 18px 0 4px; display: block; }
-  .actions { display:flex; gap:10px; flex-wrap:wrap; margin: 14px 0 6px; }
-  .actions button { border: 1.5px solid var(--ink); background: var(--paper); color: var(--ink); cursor: pointer;
-                    font-family: Georgia, 'Times New Roman', serif; padding: 9px 16px; border-radius: 999px; font-size: 15px; }
+  .actions { display:flex; gap:10px; flex-wrap:wrap; margin: 14px 0 6px; align-items:center; }
+  .actions button, .actions a.btn { border: 1.5px solid var(--ink); background: var(--paper); color: var(--ink); cursor: pointer;
+                    font-family: Georgia, 'Times New Roman', serif; padding: 9px 16px; border-radius: 999px; font-size: 15px;
+                    text-decoration: none; display: inline-block; }
   .actions button.primary { background: var(--ink); color: var(--paper); }
+  #dropOverlay { position: fixed; inset: 0; background: rgba(20, 18, 16, .88); z-index: 50;
+                 display:flex; align-items:center; justify-content:center; pointer-events: none; }
+  #dropOverlay[hidden] { display: none; }
+  #dropOverlay .drop-inner { border: 3px dashed var(--accent); border-radius: 12px; color: #f5f2ea;
+                             font-size: 26px; letter-spacing: .05em; padding: 44px 54px; text-align: center; }
+  body.dropping .sheet { outline: 3px dashed var(--accent); outline-offset: -12px; }
   .notice { border: 2px solid var(--gold); border-radius: 8px; padding: 12px 18px; margin: 26px 0; }
   .notice b { color: var(--gold); letter-spacing: .06em; }
   footer { border-top: 3px double var(--ink); margin-top: 40px; padding-top: 14px; color: var(--muted); font-size: 14.5px;
@@ -76,29 +96,51 @@ share card you can download. No install, no account, no waiting.</p>
   <button id="judgeBtn" type="button">Judge my folder</button>
   <p id="status" role="status"></p>
   <p class="fineprint">Works best in Chrome or Edge, which open a folder picker. In Firefox or Safari the
-  same button opens a folder upload control instead. Same rules, same privacy: the files stay on your machine.</p>
+  same button opens a folder upload control instead. You can also drop a folder anywhere on this page.
+  Same rules, same privacy: the files stay on your machine.</p>
 </div>
 
 <input type="file" id="dirInput" webkitdirectory hidden>
 
+<div id="dropOverlay" hidden>
+  <div class="drop-inner">Drop the folder.<br>The court is ready.</div>
+</div>
+
 <section id="result" hidden>
+  <div class="judge-bar" role="group" aria-label="Presiding judge">
+    <span class="judge-label">Presiding judge</span>
+    <button type="button" class="judge-btn" data-voice="strict">Strict</button>
+    <button type="button" class="judge-btn active" data-voice="fair">Fair</button>
+    <button type="button" class="judge-btn" data-voice="lenient">Lenient</button>
+  </div>
+  <p id="judgeName">The Fair Judge presiding.</p>
+
   <h2 class="verdict">The Verdict</h2>
   <div id="verdictTier"></div>
   <p id="verdictSummary"></p>
+  <p id="sentenceLine"></p>
 
   <table class="evidence">
     <tbody id="evidenceBody"></tbody>
   </table>
 
+  <div id="exhibitsBox"></div>
+
+  <div id="heatmapBox"></div>
+
   <div id="awardsBox"></div>
+
+  <div id="pleaBox"></div>
 
   <canvas id="card" width="1200" height="630"></canvas>
   <div class="actions">
     <button id="downloadCard" class="primary" type="button">Download the card (PNG)</button>
+    <button id="shareVerdict" type="button">Share my verdict</button>
     <button id="copyVerdict" type="button">Copy my verdict</button>
+    <a id="postToX" class="btn" href="#" target="_blank" rel="noopener">Post to X</a>
   </div>
-  <p class="sub">The full hearing (charges, exhibits, the sentence, 14 awards, plea bargains) needs the
-  tool itself: <code>pip install snap-judgment</code>, or judge another folder above.</p>
+  <p class="sub">Still CLI-only: the charges census, co-defendant hearings, custom judge packs, the
+  court record, and the wrapped kit: <code>pip install snap-judgment</code>, or judge another folder above.</p>
 </section>
 
 <section id="noEvidence" hidden>

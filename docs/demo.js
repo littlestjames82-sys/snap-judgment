@@ -1,9 +1,14 @@
 /* Snap Judgment - browser demo.
  *
  * Pure stats core (verdictForCount, isScreenshotFile, parseDimensions,
- * computeStats) is environment-agnostic and unit-tested from Node via
+ * computeStats, computePleaBargain, pleaClosing, sentenceFor) is
+ * environment-agnostic and unit-tested from Node via
  * tools/demo_js_test.js. Browser wiring lives at the bottom, guarded by
  * typeof window checks.
+ *
+ * The stats core is a faithful port of the Python tool's analyze(),
+ * compute_awards(), compute_plea_bargain() and judge voices: same
+ * thresholds, same evidence wording.
  *
  * Privacy: the demo reads file names, sizes, dates, and a few header
  * bytes for dimensions. It never displays, uploads, or stores pictures.
@@ -119,7 +124,7 @@ function parseDimensions(b) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Verdict                                                             */
+/* Verdict and judges                                                  */
 /* ------------------------------------------------------------------ */
 
 /* Exact thresholds from the Python tool. */
@@ -131,6 +136,84 @@ function verdictForCount(count) {
   if (count < 1000) return "Habitual Hoarder";
   if (count < 2500) return "Felony-Level Archivist";
   return "Unrepentant Screenshot Felon";
+}
+
+var TIER_ORDER = [
+  "Innocent Bystander",
+  "Petty Offender",
+  "Repeat Offender",
+  "Habitual Hoarder",
+  "Felony-Level Archivist",
+  "Unrepentant Screenshot Felon"
+];
+
+/* "No Evidence" ranks below every tier (-1), like the Python plea math. */
+function tierRank(tier) {
+  return TIER_ORDER.indexOf(tier);
+}
+
+/* The fair judge's sentences (the Python TIERS defaults). */
+var FAIR_SENTENCES = {
+  "Unrepentant Screenshot Felon":
+    "Sentence: delete nothing. We both know you won't. The court has stopped pretending otherwise.",
+  "Felony-Level Archivist":
+    "Sentence: delete nothing. We both know you won't.",
+  "Habitual Hoarder":
+    "Sentence: mandatory folder organization, suspended, because we both know it won't happen.",
+  "Repeat Offender":
+    "Sentence: probation. The screenshots folder gets a check-in once a month.",
+  "Petty Offender":
+    "Sentence: community service. Delete one duplicate. Just one. Baby steps.",
+  "Innocent Bystander":
+    "Sentence: case dismissed. Go take a screenshot of this verdict."
+};
+
+/* The other presiding judges, ported verbatim from the Python
+ * VOICE_SENTENCES. Voices change the wording, never the math. */
+var VOICE_SENTENCES = {
+  "strict": {
+    "Unrepentant Screenshot Felon":
+      "Sentence: maximum. Every screenshot will be reviewed, named, and justified in writing. All of them.",
+    "Felony-Level Archivist":
+      "Sentence: a full audit of the evidence locker, this weekend. No extensions. No excuses.",
+    "Habitual Hoarder":
+      "Sentence: the folder is seized. Nothing new enters it until the backlog is halved.",
+    "Repeat Offender":
+      "Sentence: weekly inspections of the screenshots folder until this court says otherwise.",
+    "Petty Offender":
+      "Sentence: the duplicates are deleted today. Not tomorrow. Today.",
+    "Innocent Bystander":
+      "Sentence: none. This time. The court will be watching the folder."
+  },
+  "lenient": {
+    "Unrepentant Screenshot Felon":
+      "Encouragement: every archive tells a story, and yours is a long one. There is no rush to change.",
+    "Felony-Level Archivist":
+      "Encouragement: you kept it all because it all mattered at the time. That is not a crime in this court.",
+    "Habitual Hoarder":
+      "Encouragement: a healthy collection. Sort one folder someday, if you ever feel like it.",
+    "Repeat Offender":
+      "Encouragement: honestly, this is most people. A little tidy now and then, if the mood strikes.",
+    "Petty Offender":
+      "Encouragement: barely a habit at all. Keep doing what you are doing.",
+    "Innocent Bystander":
+      "Encouragement: case dismissed, with applause. Screenshot this verdict; you have earned one."
+  }
+};
+
+var JUDGE_NAMES = {
+  "strict": "The Hanging Judge",
+  "fair": "The Fair Judge",
+  "lenient": "The Sympathetic Judge"
+};
+
+/* The sentence for a tier in a judge's voice ("strict" | "fair" |
+ * "lenient"); missing entries fall back to the fair judge, as in Python. */
+function sentenceFor(tier, voice) {
+  var fair = FAIR_SENTENCES[tier] || "";
+  var pack = VOICE_SENTENCES[voice];
+  if (pack && pack[tier]) return pack[tier];
+  return fair;
 }
 
 /* ------------------------------------------------------------------ */
@@ -165,13 +248,34 @@ function dayNumLabel(dayNum) {
   return MONTHS[d.getUTCMonth()] + " " + d.getUTCDate() + ", " + d.getUTCFullYear();
 }
 
+function dayNumOf(ms) {
+  var d = new Date(ms);
+  return Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86400000);
+}
+
+/* Python's _fmt_hour: 0 -> "12 AM", 13 -> "1 PM", 21 -> "9 PM". */
+function fmtHour(hour) {
+  var suffix = hour < 12 ? "AM" : "PM";
+  return (hour % 12 || 12) + " " + suffix;
+}
+
+function round1(x) { return Math.round(x * 10) / 10; }
+
+function hasDims(f) {
+  return f.width !== null && f.width !== undefined &&
+         f.height !== null && f.height !== undefined;
+}
+
 /* ------------------------------------------------------------------ */
-/* Stats core                                                          */
+/* Stats core (a port of the Python analyze + compute_awards)          */
 /* ------------------------------------------------------------------ */
 
 /* files: [{name, size, mtime (ms epoch), width, height}] - width/height
- * may be null. All date math uses local time, like the Python tool. */
-function computeStats(files) {
+ * may be null. nowMs is the court's clock (Time Traveler and The
+ * Archivist are judged against it); it defaults to Date.now().
+ * All other date math uses local time, like the Python tool. */
+function computeStats(files, nowMs) {
+  if (nowMs === undefined || nowMs === null) nowMs = Date.now();
   var count = files.length;
   var stats = {
     count: count,
@@ -183,51 +287,88 @@ function computeStats(files) {
     perYear: {},
     nightCount: 0, nightShare: 0,
     weekendCount: 0, weekendShare: 0,
+    threeAmCount: 0,
+    workCount: 0, workShare: 0,
     busiestDay: null,
+    busiestHour: 0, busiestHourCount: 0, habitShare: 0,
     longestStreak: 0,
+    longestGapDays: 0,
+    burstRecord: 0,
     largest: null,
     oldest: null,
+    exhibits: [],
+    futureShot: null,
+    anniversary: null,
+    heatmap: [],
     duplicateGroups: 0,
+    duplicateFiles: 0,
     duplicateSuspects: 0,
-    awards: []
+    awards: [],
+    pleaBargain: null
   };
+  var r, c;
+  for (r = 0; r < 7; r++) {
+    var row = [];
+    for (c = 0; c < 24; c++) row.push(0);
+    stats.heatmap.push(row);
+  }
   if (count === 0) return stats;
 
-  var total = 0, night = 0, weekend = 0;
-  var perYear = {}, dayCounts = {}, dupGroups = {};
-  var start = Infinity, end = -Infinity;
-  var largest = null, oldest = null;
+  /* Work on a copy sorted by (mtime, name), the Python shot order. */
+  var sorted = files.slice().sort(function (a, b) {
+    if (a.mtime !== b.mtime) return a.mtime - b.mtime;
+    return a.name < b.name ? -1 : (a.name > b.name ? 1 : 0);
+  });
 
-  for (var i = 0; i < files.length; i++) {
-    var f = files[i];
+  var total = 0, night = 0, weekend = 0, threeAm = 0, work = 0;
+  var perYear = {}, dayCounts = {}, dupGroups = {}, monthDays = {};
+  var hourCounts = [];
+  for (var h = 0; h < 24; h++) hourCounts.push(0);
+  var largest = null;
+
+  for (var i = 0; i < sorted.length; i++) {
+    var f = sorted[i];
     var d = new Date(f.mtime);
     total += f.size;
-    if (f.mtime < start) { start = f.mtime; oldest = f; }
-    if (f.mtime > end) { end = f.mtime; }
     if (!largest || f.size > largest.size) largest = f;
 
     var year = d.getFullYear();
     perYear[year] = (perYear[year] || 0) + 1;
 
     var hour = d.getHours();
+    hourCounts[hour]++;
     if (hour >= 22 || hour < 5) night++;
+    if (hour === 2 || hour === 3) threeAm++;
 
-    var dow = d.getDay();
-    if (dow === 0 || dow === 6) weekend++;
+    var jsDow = d.getDay();               /* Sun=0 .. Sat=6 */
+    var pyDow = (jsDow + 6) % 7;          /* Mon=0 .. Sun=6, as Python */
+    if (pyDow >= 5) weekend++;
+    if (pyDow < 5 && hour >= 9 && hour < 17) work++;
 
-    var dayNum = Math.floor(Date.UTC(year, d.getMonth(), d.getDate()) / 86400000);
+    stats.heatmap[pyDow][hour]++;
+
+    var dayNum = dayNumOf(f.mtime);
     dayCounts[dayNum] = (dayCounts[dayNum] || 0) + 1;
 
-    if (f.width !== null && f.width !== undefined &&
-        f.height !== null && f.height !== undefined) {
+    var mdKey = d.getMonth() + "-" + d.getDate();
+    if (!monthDays[mdKey]) {
+      monthDays[mdKey] = { month: d.getMonth(), day: d.getDate(), count: 0, years: {} };
+    }
+    monthDays[mdKey].count++;
+    monthDays[mdKey].years[year] = true;
+
+    if (hasDims(f)) {
       var key = f.size + "|" + f.width + "x" + f.height;
       dupGroups[key] = (dupGroups[key] || 0) + 1;
     }
   }
 
-  /* Busiest day + longest daily streak from sorted day numbers. */
+  var start = sorted[0].mtime, end = sorted[count - 1].mtime;
+  var firstDayNum = dayNumOf(start), lastDayNum = dayNumOf(end);
+
+  /* Busiest day, longest streak, longest clean stretch. */
   var days = Object.keys(dayCounts).map(Number).sort(function (a, b) { return a - b; });
-  var busiest = null, streak = 0, run = 0, prev = null;
+  var busiest = null, streak = 0, run = 0, prev = null, longestGap = 0;
   for (var j = 0; j < days.length; j++) {
     var dn = days[j];
     if (!busiest || dayCounts[dn] > busiest.count) {
@@ -235,57 +376,257 @@ function computeStats(files) {
     }
     run = (prev !== null && dn === prev + 1) ? run + 1 : 1;
     if (run > streak) streak = run;
+    if (prev !== null && dn - prev - 1 > longestGap) longestGap = dn - prev - 1;
     prev = dn;
   }
 
-  var dupSuspects = 0, dupGroupCount = 0;
-  for (var k in dupGroups) {
-    if (dupGroups[k] >= 2) { dupGroupCount++; dupSuspects += dupGroups[k] - 1; }
+  /* Busiest hour: most shots in one clock hour; ties go to the
+   * earliest hour, as in Python. */
+  var busiestHour = 0, busiestHourCount = 0;
+  for (var hh = 0; hh < 24; hh++) {
+    if (hourCounts[hh] > busiestHourCount) {
+      busiestHourCount = hourCounts[hh];
+      busiestHour = hh;
+    }
   }
 
+  /* Burst record: most screenshots inside any rolling 60-second window. */
+  var burst = 0, jj = 0;
+  for (var bi = 0; bi < sorted.length; bi++) {
+    jj = Math.max(jj, bi);
+    while (jj + 1 < sorted.length && sorted[jj + 1].mtime - sorted[bi].mtime <= 60000) jj++;
+    if (jj - bi + 1 > burst) burst = jj - bi + 1;
+  }
+
+  /* Duplicate suspects: groups sharing exact (size, dimensions). */
+  var dupFiles = 0, dupExtras = 0, dupGroupCount = 0;
+  for (var k in dupGroups) {
+    if (dupGroups[k] >= 2) {
+      dupGroupCount++;
+      dupFiles += dupGroups[k];
+      dupExtras += dupGroups[k] - 1;
+    }
+  }
+
+  /* The earliest screenshot dated in the future, if any. */
+  var futureShot = null;
+  for (var fi = 0; fi < sorted.length; fi++) {
+    if (sorted[fi].mtime > nowMs) {
+      futureShot = { name: sorted[fi].name, mtime: sorted[fi].mtime };
+      break;
+    }
+  }
+
+  /* Screenshot anniversary: the month-day with the most screenshots
+   * summed across years (ties to the earliest month-day); it only
+   * counts once it has at least five to its name. */
+  var anniversary = null, annivBest = null;
+  for (var mk in monthDays) {
+    var md = monthDays[mk];
+    if (!annivBest || md.count > annivBest.count ||
+        (md.count === annivBest.count &&
+         (md.month < annivBest.month ||
+          (md.month === annivBest.month && md.day < annivBest.day)))) {
+      annivBest = md;
+    }
+  }
+  if (annivBest && annivBest.count >= 5) {
+    anniversary = {
+      monthDay: MONTHS[annivBest.month] + " " + annivBest.day,
+      count: annivBest.count,
+      years: Object.keys(annivBest.years).length
+    };
+  }
+
+  var oldestFile = sorted[0];
   stats.totalBytes = total;
   stats.totalSizeHuman = humanSize(total);
   stats.spanStart = start;
   stats.spanEnd = end;
-  stats.spanDays = Math.floor((end - start) / 86400000);
+  stats.spanDays = lastDayNum - firstDayNum;
   stats.spanYears = (end - start) / (365.25 * 86400000);
   stats.spanStartLabel = dateLabel(start);
   stats.spanEndLabel = dateLabel(end);
   stats.perYear = perYear;
   stats.nightCount = night;
-  stats.nightShare = Math.round((night / count) * 1000) / 10;
+  stats.nightShare = round1(100 * night / count);
   stats.weekendCount = weekend;
-  stats.weekendShare = Math.round((weekend / count) * 1000) / 10;
-  stats.busiestDay = {
-    label: dayNumLabel(busiest.dayNum),
-    count: busiest.count
-  };
+  stats.weekendShare = round1(100 * weekend / count);
+  stats.threeAmCount = threeAm;
+  stats.workCount = work;
+  stats.workShare = round1(100 * work / count);
+  stats.busiestDay = { label: dayNumLabel(busiest.dayNum), count: busiest.count };
+  stats.busiestHour = busiestHour;
+  stats.busiestHourCount = busiestHourCount;
+  stats.habitShare = round1(100 * busiestHourCount / count);
   stats.longestStreak = streak;
+  stats.longestGapDays = longestGap;
+  stats.burstRecord = burst;
   stats.largest = { name: largest.name, size: largest.size, sizeHuman: humanSize(largest.size) };
-  stats.oldest = { name: oldest.name, mtime: oldest.mtime, label: dateLabel(oldest.mtime) };
+  stats.oldest = { name: oldestFile.name, mtime: oldestFile.mtime, label: dateLabel(oldestFile.mtime) };
+  stats.exhibits = sorted.slice(0, 5).map(function (s) {
+    return { name: s.name, mtime: s.mtime, label: dateLabel(s.mtime) };
+  });
+  stats.futureShot = futureShot;
+  stats.anniversary = anniversary;
   stats.duplicateGroups = dupGroupCount;
-  stats.duplicateSuspects = dupSuspects;
+  stats.duplicateFiles = dupFiles;
+  stats.duplicateSuspects = dupExtras;
 
-  /* Awards: priority order, at most 3. */
+  /* Awards: every Python award whose inputs the demo collects, in the
+   * Python order, with the Python thresholds and evidence wording.
+   * Nothing here needs the court record, so nothing is skipped. */
   var awards = [];
-  if (stats.nightShare >= 20 && night >= 10) {
+  if (night >= 20 && stats.nightShare >= 25) {
     awards.push({ name: "Night Owl",
-      detail: night + " screenshots between 10 PM and 5 AM (" + stats.nightShare + "% of the total)." });
+      detail: night + " screenshots between 10 PM and 5 AM (" + stats.nightShare.toFixed(1) + "% of the total)." });
+  }
+  if (threeAm >= 10) {
+    awards.push({ name: "The 3 AM Club",
+      detail: threeAm + " screenshots taken between 2 AM and 4 AM, when nothing on screen can be urgent." });
+  }
+  if (burst >= 8) {
+    awards.push({ name: "Burst Mode",
+      detail: burst + " screenshots inside a single 60-second window." });
+  }
+  if (Math.floor((nowMs - start) / 86400000) >= 3 * 365) {
+    awards.push({ name: "The Archivist",
+      detail: "The oldest screenshot dates to " + stats.oldest.label + ", over three years ago, and it is still here." });
+  }
+  if (count >= 50 && stats.workShare >= 50) {
+    awards.push({ name: "Receipt Keeper",
+      detail: stats.workShare.toFixed(1) + "% of shots were taken on weekdays between 9 AM and 5 PM. Very professional." });
+  }
+  if (dupFiles >= 10) {
+    awards.push({ name: "Repeat Customer",
+      detail: dupFiles + " files share an exact size and dimensions with a sibling. The same screenshot, taken again." });
+  }
+  if (stats.habitShare >= 25) {
+    awards.push({ name: "Creature of Habit",
+      detail: stats.habitShare.toFixed(1) + "% of all screenshots were taken in the " + fmtHour(busiestHour) + " hour. Same time, same impulse." });
+  }
+  if (total >= 1024 * 1024 * 1024) {
+    awards.push({ name: "Gigabyte Club",
+      detail: "The screenshots alone total " + stats.totalSizeHuman + ". The evidence locker needs a bigger room." });
+  }
+  if (futureShot) {
+    awards.push({ name: "Time Traveler",
+      detail: futureShot.name + " is dated " + dateLabel(futureShot.mtime) + ", which has not happened yet. The court admits it anyway." });
+  }
+  if (stats.spanDays >= 4 * 365) {
+    awards.push({ name: "The Long Haul",
+      detail: "The collection spans " + (stats.spanDays / 365.25).toFixed(1) + " years of screenshots." });
+  }
+  if (stats.spanDays >= 8 * 365) {
+    awards.push({ name: "Lifer",
+      detail: "The collection spans " + (stats.spanDays / 365.25).toFixed(1) + " years. The screenshots have seniority now." });
+  }
+  if (stats.spanDays >= 10 * 365) {
+    awards.push({ name: "Ancient Relic",
+      detail: stats.oldest.name + " dates to " + stats.oldest.label + ", over ten years before the newest screenshot in evidence." });
+  }
+  if (anniversary && anniversary.count >= 15) {
+    awards.push({ name: "Anniversary",
+      detail: anniversary.count + " screenshots fall on " + anniversary.monthDay + ", gathered across " +
+        anniversary.years + " different years. Some dates just attract evidence." });
   }
   if (streak >= 7) {
     awards.push({ name: "Screenshot Streak",
       detail: streak + " consecutive days with at least one screenshot." });
   }
-  if (dupSuspects >= 5) {
-    awards.push({ name: "Repeat Customer",
-      detail: dupSuspects + " files are exact duplicates of a sibling. The same screenshot, taken again." });
+  if (longestGap >= 30) {
+    awards.push({ name: "Clean Stretch",
+      detail: longestGap + " days without a single screenshot. The court's longest recorded moment of restraint." });
   }
-  if (stats.spanYears >= 3) {
-    awards.push({ name: "Archivist",
-      detail: "The collection spans " + stats.spanYears.toFixed(1) + " years, back to " + stats.spanStartLabel + "." });
+  if (count > 0 && count < 50) {
+    awards.push({ name: "Minimalist",
+      detail: "Only " + count + " screenshots. The court rarely sees such restraint." });
   }
-  stats.awards = awards.slice(0, 3);
+  stats.awards = awards;
   return stats;
+}
+
+/* ------------------------------------------------------------------ */
+/* The plea bargain (a port of the Python compute_plea_bargain)        */
+/* ------------------------------------------------------------------ */
+
+/* What would happen IF the defendant deleted (a) every duplicate
+ * suspect except one keeper per exact size+dimensions group, and
+ * (b) every screenshot older than pleaYears years, measured from the
+ * newest screenshot's date. Nothing is deleted; this is math. */
+function computePleaBargain(files, pleaYears) {
+  if (pleaYears === undefined || pleaYears === null) pleaYears = 2;
+  var plea = {
+    years: pleaYears,
+    oldRemoved: 0,
+    duplicateRemoved: 0,
+    removedCount: 0,
+    removedBytes: 0,
+    removedHuman: "0 B",
+    remainingCount: files.length,
+    projectedTier: verdictForCount(files.length)
+  };
+  if (files.length === 0) return plea;
+
+  var newest = -Infinity;
+  for (var i = 0; i < files.length; i++) {
+    if (files[i].mtime > newest) newest = files[i].mtime;
+  }
+  var nd = new Date(newest);
+  var cy = nd.getFullYear() - pleaYears, cm = nd.getMonth(), cd = nd.getDate();
+  var cutoffDayNum = Math.floor(Date.UTC(cy, cm, cd) / 86400000);
+  if (new Date(cutoffDayNum * 86400000).getUTCMonth() !== cm) {
+    /* Feb 29 lands on Feb 28, as in Python's _minus_years. */
+    cutoffDayNum = Math.floor(Date.UTC(cy, 1, 28) / 86400000);
+  }
+
+  var groups = {};
+  for (var j = 0; j < files.length; j++) {
+    var f = files[j];
+    if (hasDims(f)) {
+      var key = f.size + "|" + f.width + "x" + f.height;
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(f);
+    }
+  }
+  var extraSet = new Set();
+  for (var k in groups) {
+    var members = groups[k];
+    if (members.length >= 2) {
+      members.sort(function (a, b) {
+        if (a.mtime !== b.mtime) return a.mtime - b.mtime;
+        return a.name < b.name ? -1 : (a.name > b.name ? 1 : 0);
+      });
+      for (var m = 1; m < members.length; m++) extraSet.add(members[m]);
+    }
+  }
+
+  var removedBytes = 0;
+  for (var n = 0; n < files.length; n++) {
+    var shot = files[n];
+    var isOld = dayNumOf(shot.mtime) < cutoffDayNum;
+    var isDuplicate = extraSet.has(shot);
+    if (isOld) {
+      plea.oldRemoved++;
+      removedBytes += shot.size;
+    } else if (isDuplicate) {
+      plea.duplicateRemoved++;
+      removedBytes += shot.size;
+    }
+  }
+  plea.removedCount = plea.oldRemoved + plea.duplicateRemoved;
+  plea.removedBytes = removedBytes;
+  plea.removedHuman = humanSize(removedBytes);
+  plea.remainingCount = files.length - plea.removedCount;
+  plea.projectedTier = verdictForCount(plea.remainingCount);
+  return plea;
+}
+
+function pleaClosing(plea, currentTier) {
+  if (tierRank(plea.projectedTier) < tierRank(currentTier)) {
+    return "The court would accept this plea.";
+  }
+  return "The court notes this plea changes nothing. The verdict stands.";
 }
 
 /* The ready-to-post verdict text for the copy button. */
@@ -304,8 +645,14 @@ if (typeof module !== "undefined" && module.exports) {
     isScreenshotFile: isScreenshotFile,
     parseDimensions: parseDimensions,
     verdictForCount: verdictForCount,
+    tierRank: tierRank,
+    sentenceFor: sentenceFor,
+    JUDGE_NAMES: JUDGE_NAMES,
     humanSize: humanSize,
+    fmtHour: fmtHour,
     computeStats: computeStats,
+    computePleaBargain: computePleaBargain,
+    pleaClosing: pleaClosing,
     verdictPostText: verdictPostText
   };
 }
@@ -324,12 +671,15 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
 
 function initDemo() {
   var MAX_SCANNED = 50000;
+  var DEMO_URL = "https://littlestjames82-sys.github.io/snap-judgment/demo.html";
   var btn = document.getElementById("judgeBtn");
   var input = document.getElementById("dirInput");
   var status = document.getElementById("status");
   var result = document.getElementById("result");
   var noEvidence = document.getElementById("noEvidence");
+  var overlay = document.getElementById("dropOverlay");
   var currentStats = null;
+  var currentVoice = "fair";
 
   function setStatus(msg) { status.textContent = msg; }
 
@@ -355,6 +705,95 @@ function initDemo() {
     input.value = "";
   });
 
+  /* --- drag and drop: drop a folder (or files) anywhere ------------ */
+
+  var dragDepth = 0;
+  function showDropState() {
+    document.body.classList.add("dropping");
+    if (overlay) overlay.hidden = false;
+  }
+  function hideDropState() {
+    document.body.classList.remove("dropping");
+    if (overlay) overlay.hidden = true;
+  }
+  window.addEventListener("dragenter", function (e) {
+    e.preventDefault();
+    dragDepth++;
+    showDropState();
+  });
+  window.addEventListener("dragover", function (e) {
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+  });
+  window.addEventListener("dragleave", function (e) {
+    e.preventDefault();
+    dragDepth--;
+    if (dragDepth <= 0) { dragDepth = 0; hideDropState(); }
+  });
+  window.addEventListener("drop", function (e) {
+    e.preventDefault();
+    dragDepth = 0;
+    hideDropState();
+    handleDrop(e.dataTransfer).catch(function () { setStatus(""); });
+  });
+
+  async function handleDrop(dataTransfer) {
+    if (!dataTransfer) return;
+    var entries = [];
+    if (dataTransfer.items) {
+      for (var i = 0; i < dataTransfer.items.length; i++) {
+        var item = dataTransfer.items[i];
+        if (item.kind === "file" && typeof item.webkitGetAsEntry === "function") {
+          var entry = item.webkitGetAsEntry();
+          if (entry) entries.push(entry);
+        }
+      }
+    }
+    if (entries.length === 0) {
+      /* Fallback: the flat file list, no folder names available. */
+      if (dataTransfer.files && dataTransfer.files.length > 0) {
+        var picked = Array.prototype.slice.call(dataTransfer.files, 0, MAX_SCANNED);
+        var flat = [];
+        for (var p = 0; p < picked.length; p++) {
+          if (isScreenshotFile(picked[p].name, "")) flat.push(picked[p]);
+        }
+        await finishScan(flat);
+      }
+      return;
+    }
+    var candidates = [];
+    var scanned = 0;
+    async function traverse(entry, parentName, depth) {
+      if (scanned >= MAX_SCANNED) return;
+      if (entry.isFile) {
+        scanned++;
+        var file = await new Promise(function (resolve, reject) {
+          entry.file(resolve, reject);
+        });
+        if (isScreenshotFile(file.name, parentName)) candidates.push(file);
+      } else if (entry.isDirectory) {
+        if (depth > 1) return;
+        var reader = entry.createReader();
+        var children;
+        do {
+          children = await new Promise(function (resolve, reject) {
+            reader.readEntries(resolve, reject);
+          });
+          for (var ch = 0; ch < children.length; ch++) {
+            await traverse(children[ch], entry.name, depth + 1);
+          }
+        } while (children.length > 0);
+      }
+    }
+    setStatus("Reading the evidence...");
+    for (var e = 0; e < entries.length; e++) {
+      await traverse(entries[e], "", 0);
+    }
+    await finishScan(candidates);
+  }
+
+  /* --- actions ------------------------------------------------------ */
+
   document.getElementById("downloadCard").addEventListener("click", function () {
     var canvas = document.getElementById("card");
     if (canvas.toBlob) {
@@ -373,7 +812,7 @@ function initDemo() {
     }
   });
 
-  document.getElementById("copyVerdict").addEventListener("click", function () {
+  function copyVerdict() {
     if (!currentStats) return;
     var text = verdictPostText(currentStats);
     var done = function () { setStatus("Verdict copied. Post it anywhere."); };
@@ -381,6 +820,21 @@ function initDemo() {
       navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text); done(); });
     } else {
       fallbackCopy(text); done();
+    }
+  }
+
+  document.getElementById("copyVerdict").addEventListener("click", copyVerdict);
+
+  document.getElementById("shareVerdict").addEventListener("click", function () {
+    if (!currentStats) return;
+    if (typeof navigator.share === "function") {
+      navigator.share({
+        title: "Snap Judgment",
+        text: verdictPostText(currentStats),
+        url: DEMO_URL
+      }).catch(function () { /* user dismissed the share sheet */ });
+    } else {
+      copyVerdict();
     }
   });
 
@@ -393,6 +847,31 @@ function initDemo() {
     try { document.execCommand("copy"); } catch (e) { /* clipboard is a courtesy */ }
     ta.remove();
   }
+
+  /* --- the presiding judge ------------------------------------------ */
+
+  var judgeButtons = document.querySelectorAll(".judge-btn");
+  judgeButtons.forEach(function (b) {
+    b.addEventListener("click", function () {
+      currentVoice = b.getAttribute("data-voice") || "fair";
+      judgeButtons.forEach(function (other) {
+        other.classList.toggle("active", other === b);
+      });
+      if (currentStats && currentStats.count > 0) {
+        renderSentence(currentStats);
+        drawCard(currentStats);
+      }
+    });
+  });
+
+  function renderSentence(stats) {
+    var el = document.getElementById("sentenceLine");
+    el.textContent = sentenceFor(stats.tier, currentVoice);
+    var judgeEl = document.getElementById("judgeName");
+    if (judgeEl) judgeEl.textContent = JUDGE_NAMES[currentVoice] + " presiding.";
+  }
+
+  /* --- scanning ------------------------------------------------------- */
 
   async function scanWithPicker() {
     var dir = await window.showDirectoryPicker();
@@ -429,6 +908,7 @@ function initDemo() {
       }
     }
     var stats = computeStats(records);
+    stats.pleaBargain = computePleaBargain(records, 2);
     currentStats = stats;
     setStatus("");
     render(stats);
@@ -449,6 +929,8 @@ function initDemo() {
     };
   }
 
+  /* --- rendering ------------------------------------------------------ */
+
   function render(stats) {
     if (stats.count === 0) {
       result.hidden = true;
@@ -461,6 +943,7 @@ function initDemo() {
     document.getElementById("verdictSummary").textContent =
       stats.count + " screenshots, " + stats.totalSizeHuman + " of evidence, spanning " +
       stats.spanStartLabel + " to " + stats.spanEndLabel + ".";
+    renderSentence(stats);
 
     var rows = [
       ["Total screenshots", stats.count.toLocaleString("en-US")],
@@ -489,6 +972,84 @@ function initDemo() {
       tbody.appendChild(tr);
     });
 
+    renderExhibits(stats);
+    renderHeatmap(stats);
+    renderAwards(stats);
+    renderPlea(stats);
+
+    var xLink = document.getElementById("postToX");
+    if (xLink) {
+      xLink.href = "https://twitter.com/intent/tweet?text=" +
+        encodeURIComponent(verdictPostText(stats));
+    }
+
+    drawCard(stats);
+    result.hidden = false;
+    result.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function renderExhibits(stats) {
+    var box = document.getElementById("exhibitsBox");
+    box.innerHTML = "";
+    if (stats.count < 5 || stats.exhibits.length === 0) return;
+    var h = document.createElement("h3");
+    h.textContent = "Exhibits";
+    box.appendChild(h);
+    var letters = "ABCDE";
+    stats.exhibits.forEach(function (ex, idx) {
+      var p = document.createElement("p");
+      p.textContent = "Exhibit " + letters[idx] + " - " + ex.name + " (" + ex.label + ")";
+      box.appendChild(p);
+    });
+  }
+
+  function renderHeatmap(stats) {
+    var box = document.getElementById("heatmapBox");
+    box.innerHTML = "";
+    var max = 0, r, c;
+    for (r = 0; r < 7; r++) {
+      for (c = 0; c < 24; c++) {
+        if (stats.heatmap[r][c] > max) max = stats.heatmap[r][c];
+      }
+    }
+    if (max === 0) return;
+    var h = document.createElement("h3");
+    h.textContent = "The Heatmap";
+    box.appendChild(h);
+    var note = document.createElement("p");
+    note.className = "heatmap-note";
+    note.textContent = "Screenshots by weekday and hour. Hover a cell for its count.";
+    box.appendChild(note);
+    var table = document.createElement("table");
+    table.className = "heatmap";
+    var head = document.createElement("tr");
+    head.appendChild(document.createElement("th"));
+    for (c = 0; c < 24; c++) {
+      var th = document.createElement("th");
+      th.textContent = c;
+      head.appendChild(th);
+    }
+    table.appendChild(head);
+    var dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    for (r = 0; r < 7; r++) {
+      var tr = document.createElement("tr");
+      var label = document.createElement("th");
+      label.textContent = dayNames[r];
+      tr.appendChild(label);
+      for (c = 0; c < 24; c++) {
+        var n = stats.heatmap[r][c];
+        var td = document.createElement("td");
+        var opacity = n === 0 ? 0.04 : 0.15 + 0.85 * (n / max);
+        td.style.background = "rgba(176, 141, 60, " + opacity.toFixed(2) + ")";
+        td.title = n + (n === 1 ? " screenshot" : " screenshots");
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+    box.appendChild(table);
+  }
+
+  function renderAwards(stats) {
     var awardsBox = document.getElementById("awardsBox");
     awardsBox.innerHTML = "";
     if (stats.awards.length > 0) {
@@ -503,10 +1064,44 @@ function initDemo() {
         awardsBox.appendChild(p);
       });
     }
+  }
 
-    drawCard(stats);
-    result.hidden = false;
-    result.scrollIntoView({ behavior: "smooth", block: "start" });
+  function renderPlea(stats) {
+    var box = document.getElementById("pleaBox");
+    box.innerHTML = "";
+    var plea = stats.pleaBargain;
+    if (!plea) return;
+    var h = document.createElement("h3");
+    h.textContent = "The Plea Bargain";
+    box.appendChild(h);
+    var intro = document.createElement("p");
+    intro.textContent = "If the defendant deleted " + plea.oldRemoved.toLocaleString("en-US") +
+      " screenshots older than " + plea.years + (plea.years === 1 ? " year" : " years") + " and " +
+      plea.duplicateRemoved.toLocaleString("en-US") +
+      " duplicate extras - a purely hypothetical exercise; this court deletes nothing - then:";
+    box.appendChild(intro);
+    var table = document.createElement("table");
+    table.className = "evidence";
+    var tbody = document.createElement("tbody");
+    var rows = [
+      ["Files removed", plea.removedCount.toLocaleString("en-US")],
+      ["Space reclaimed", plea.removedHuman + " (" + plea.removedBytes.toLocaleString("en-US") + " bytes)"],
+      ["Remaining evidence", plea.remainingCount.toLocaleString("en-US") + " screenshots"],
+      ["Projected verdict", plea.projectedTier]
+    ];
+    rows.forEach(function (r) {
+      var tr = document.createElement("tr");
+      var th = document.createElement("th"); th.textContent = r[0];
+      var td = document.createElement("td"); td.textContent = r[1];
+      tr.appendChild(th); tr.appendChild(td);
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    box.appendChild(table);
+    var closing = document.createElement("p");
+    closing.className = "plea-closing";
+    closing.textContent = pleaClosing(plea, stats.tier);
+    box.appendChild(closing);
   }
 
   function drawCard(stats) {
@@ -551,19 +1146,37 @@ function initDemo() {
 
     ctx.fillStyle = "#a49fb2";
     ctx.font = "30px Arial, Helvetica, sans-serif";
-    ctx.fillText("Night share " + stats.nightShare.toFixed(1) + "%", W / 2, 462);
+    ctx.fillText("Night share " + stats.nightShare.toFixed(1) + "%", W / 2, 458);
 
     if (stats.awards.length > 0) {
       ctx.fillStyle = "#e8e3d8";
       ctx.font = "25px Arial, Helvetica, sans-serif";
-      ctx.fillText("Awards: " + stats.awards.map(function (a) { return a.name; }).join(", "), W / 2, 508);
+      ctx.fillText("Awards: " + stats.awards.slice(0, 3).map(function (a) { return a.name; }).join(", "), W / 2, 500);
+    }
+
+    /* The sentence, in the presiding judge's voice. */
+    var sentence = sentenceFor(stats.tier, currentVoice);
+    if (sentence) {
+      ctx.fillStyle = "#cfc9ba";
+      var sSize = 24;
+      ctx.font = "italic " + sSize + "px Georgia, 'Times New Roman', serif";
+      while (ctx.measureText(sentence).width > W - 120 && sSize > 14) {
+        sSize -= 2;
+        ctx.font = "italic " + sSize + "px Georgia, 'Times New Roman', serif";
+      }
+      var shown = sentence;
+      while (ctx.measureText(shown).width > W - 120 && shown.length > 4) {
+        shown = shown.slice(0, -2);
+      }
+      if (shown !== sentence) shown = shown.replace(/[\s,.;:]+$/, "") + "…";
+      ctx.fillText(shown, W / 2, 540);
     }
 
     ctx.fillStyle = "#8f8b7d";
     ctx.font = "23px Arial, Helvetica, sans-serif";
-    ctx.fillText("Judged from file metadata only. No pixels were read.", W / 2, 560);
+    ctx.fillText("Judged from file metadata only. No pixels were read.", W / 2, 574);
     ctx.fillStyle = "#d4af37";
     ctx.font = "600 23px Menlo, Consolas, monospace";
-    ctx.fillText("pip install snap-judgment", W / 2, 594);
+    ctx.fillText("pip install snap-judgment", W / 2, 602);
   }
 }
