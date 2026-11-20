@@ -2,8 +2,9 @@
  *
  * Pure stats core (verdictForCount, isScreenshotFile, parseDimensions,
  * computeStats, computePleaBargain, pleaClosing, sentenceFor,
- * intensityBand, courtCommentary, and the Downloads Docket's
- * downloadsVerdictFor, computeDownloadsStats, downloadsCommentary) is
+ * intensityBand, courtCommentary, the Downloads Docket's
+ * downloadsVerdictFor, computeDownloadsStats, downloadsCommentary,
+ * and the Grand Jury's grandJuryStanding and combinedTotals) is
  * environment-agnostic and unit-tested from Node via
  * tools/demo_js_test.js. Browser wiring lives at the bottom, guarded
  * by typeof window checks.
@@ -1137,6 +1138,105 @@ function downloadsPostText(stats) {
     "https://littlestjames82-sys.github.io/snap-judgment/demo.html";
 }
 
+/* ------------------------------------------------------------------ */
+/* The Grand Jury (both courts, one hearing, a combined FULL DOCKET)   */
+/* ------------------------------------------------------------------ */
+
+/* The docket's tier ladder, in the Python DL_TIER_ORDER. */
+var DL_TIER_ORDER = [
+  "Tidy Desk",
+  "Mild Clutter",
+  "Digital Junk Drawer",
+  "Landfill Adjacent",
+  "Hoarding Situation",
+  "Superfund Site"
+];
+
+/* "No Evidence" ranks below every downloads tier (-1). */
+function dlTierRank(tier) {
+  return DL_TIER_ORDER.indexOf(tier);
+}
+
+/* The standing of the full docket, ported verbatim from the Python
+ * GRAND_JURY_STANDING: keyed by the presiding judge's voice and by
+ * the pair of severities. "low" when both courts sit in their bottom
+ * two tiers, "high" when both sit in their top two, "mixed"
+ * otherwise. {worse} names the folder carrying the heavier evidence
+ * ("both folders" when the pair is tied). A court with no evidence
+ * counts as below the bottom tier. */
+var GRAND_JURY_STANDING = {
+  "strict": {
+    "low":
+      "The court searched both folders for a case and found only housekeeping. Suspiciously clean. Both folders remain under observation.",
+    "mixed":
+      "The court weighs both folders and finds the heavier evidence in {worse}. That is where the sentence lands, and it will not be light.",
+    "high":
+      "Both folders stand guilty, and the combined docket is the worst this court has entered into the record all year. The court is almost impressed."
+  },
+  "fair": {
+    "low":
+      "The court finds little to prosecute. Both folders are disappointingly tidy, and the court accepts the disappointment.",
+    "mixed":
+      "The court's verdict is split, and the weight of it lands on {worse}. The sentence falls where the evidence is heaviest.",
+    "high":
+      "The court has seen enough. Two folders, two crime scenes, one defendant. The full docket is an archive of good intentions and no deletions."
+  },
+  "lenient": {
+    "low":
+      "The court finds two tidy folders and very little to forgive. The case is nearly dismissed, with genuine affection.",
+    "mixed":
+      "The court has weighed the whole docket, and the heavier heart belongs to {worse}. The court prescribes a gentle sort, starting there.",
+    "high":
+      "The court loves a rich archive, and this is two of them at once. Nothing here is a crime; it is simply a great deal of keeping, in stereo."
+  }
+};
+
+/* The FULL DOCKET standing line for a pair of hearings, in the
+ * presiding judge's voice. Either stats object may be null (that
+ * court has not sat yet), which counts as No Evidence. */
+function grandJuryStanding(statsS, statsD, voice) {
+  var shotsTier = statsS ? statsS.tier : "No Evidence";
+  var dlTier = statsD ? statsD.tier : "No Evidence";
+  var shotsRank = shotsTier === "No Evidence" ? -1 : tierRank(shotsTier);
+  var dlRank = dlTier === "No Evidence" ? -1 : dlTierRank(dlTier);
+  var pairClass;
+  if (Math.max(shotsRank, dlRank) <= 1) pairClass = "low";
+  else if (Math.min(shotsRank, dlRank) >= 4) pairClass = "high";
+  else pairClass = "mixed";
+  var worse = "both folders";
+  if (shotsRank > dlRank) worse = "the screenshots folder";
+  else if (dlRank > shotsRank) worse = "the downloads folder";
+  var pack = GRAND_JURY_STANDING[voice] || GRAND_JURY_STANDING.fair;
+  return pack[pairClass].replace("{worse}", worse);
+}
+
+/* The combined weight of the full docket: both courts' files and
+ * bytes added together. A court that has not sat yet adds nothing. */
+function combinedTotals(statsS, statsD) {
+  var bytes = (statsS ? statsS.totalBytes : 0) + (statsD ? statsD.totalBytes : 0);
+  return {
+    files: (statsS ? statsS.count : 0) + (statsD ? statsD.count : 0),
+    bytes: bytes,
+    human: dlHumanBytes(bytes)
+  };
+}
+
+/* The ready-to-post text for a grand jury hearing, built from the
+ * same numbers as the FULL DOCKET section. */
+function grandJuryPostText(statsS, statsD) {
+  var totals = combinedTotals(statsS, statsD);
+  var sTier = statsS ? statsS.tier : "No Evidence";
+  var dTier = statsD ? statsD.tier : "No Evidence";
+  var sCount = statsS ? statsS.count : 0;
+  var dCount = statsD ? statsD.count : 0;
+  return "I convened the Grand Jury on my folders: " +
+    sCount.toLocaleString("en-US") + " screenshots (" + sTier + ") and " +
+    dCount.toLocaleString("en-US") + " downloads files (" + dTier + "). " +
+    "The full docket: " + totals.files.toLocaleString("en-US") + " files, " +
+    totals.human + " of evidence. Judged from metadata only. " +
+    "https://littlestjames82-sys.github.io/snap-judgment/demo.html";
+}
+
 /* webkitdirectory paths: "Folder/file" is a top-level file of the
  * picked folder; "Folder/sub/file" is one level too deep for the
  * docket, which judges only the surface. A bare file name (no folder
@@ -1328,7 +1428,12 @@ if (typeof module !== "undefined" && module.exports) {
     downloadsCommentary: downloadsCommentary,
     downloadsPostText: downloadsPostText,
     isTopLevelPath: isTopLevelPath,
-    makeSampleDownloadsFiles: makeSampleDownloadsFiles
+    makeSampleDownloadsFiles: makeSampleDownloadsFiles,
+    dlTierRank: dlTierRank,
+    GRAND_JURY_STANDING: GRAND_JURY_STANDING,
+    grandJuryStanding: grandJuryStanding,
+    combinedTotals: combinedTotals,
+    grandJuryPostText: grandJuryPostText
   };
 }
 
@@ -1358,6 +1463,17 @@ function initDemo() {
   var currentIntensity = 50;
   var currentSample = false;
   var currentCourt = "screenshots";
+  /* Grand jury state: each court's stats land independently, and
+   * the FULL DOCKET renders once both are in. A side is null until
+   * its folder has been picked (or sampled); a stats object with
+   * count 0 means the court sat and found No Evidence. */
+  var gjShotsStats = null;
+  var gjDlStats = null;
+  var gjShotsSample = false;
+  var gjDlSample = false;
+  /* Which hearing a fallback folder-upload pick belongs to:
+   * "main", "gjShots", or "gjDl". */
+  var pendingPick = null;
 
   function setStatus(msg) { status.textContent = msg; }
 
@@ -1389,36 +1505,61 @@ function initDemo() {
     cliOnly: "Still CLI-only: the cleanup order, award packs, the court record, and " +
       "co-defendant hearings: <code>pip install snap-judgment</code>, or judge another folder above."
   };
+  var GJ_COPY = {
+    explainer: "This is the live demo of <a href=\"index.html\">Snap Judgment</a>. Convene the " +
+      "Grand Jury: pick your screenshots folder and your Downloads folder, in either order, " +
+      "and the court tries both in one hearing, then closes with a combined Full Docket " +
+      "ruling and a share card. No install, no account, no waiting.",
+    defendant: "Defendants: Your Screenshots Folder and Your Downloads Folder",
+    cliOnly: "In the terminal the Grand Jury also writes a combined Markdown report, and " +
+      "each court keeps its own rematch afterward: <code>pip install snap-judgment</code>, " +
+      "or judge another folder above."
+  };
 
   var courtButtons = document.querySelectorAll(".court-btn");
+  var btn2 = document.getElementById("judgeBtn2");
+  var gjResult = document.getElementById("gjResult");
   function setCourt(court) {
     currentCourt = court;
     currentStats = null;
     currentSample = false;
+    gjShotsStats = null;
+    gjDlStats = null;
+    gjShotsSample = false;
+    gjDlSample = false;
+    pendingPick = null;
     result.hidden = true;
     noEvidence.hidden = true;
+    if (gjResult) gjResult.hidden = true;
     setStatus("");
     courtButtons.forEach(function (b) {
       b.classList.toggle("active", b.getAttribute("data-court") === court);
     });
     var dl = court === "downloads";
-    btn.textContent = dl ? "Choose your Downloads folder" : "Choose your screenshots folder";
+    var gj = court === "grandjury";
+    btn.textContent = gj ? "1. Choose your screenshots folder"
+      : dl ? "Choose your Downloads folder" : "Choose your screenshots folder";
+    if (btn2) btn2.hidden = !gj;
     var privacyShots = document.getElementById("privacyShots");
     var privacyDl = document.getElementById("privacyDl");
+    var privacyGj = document.getElementById("privacyGj");
     if (privacyShots && privacyDl) {
-      privacyShots.hidden = dl;
+      privacyShots.hidden = dl || gj;
       privacyDl.hidden = !dl;
     }
+    if (privacyGj) privacyGj.hidden = !gj;
     var noticeShots = document.getElementById("noticeShots");
     var noticeDl = document.getElementById("noticeDl");
+    var noticeGj = document.getElementById("noticeGj");
     if (noticeShots && noticeDl) {
-      noticeShots.hidden = dl;
+      noticeShots.hidden = dl || gj;
       noticeDl.hidden = !dl;
     }
-    if (explainerEl) explainerEl.innerHTML = dl ? DL_COPY.explainer : shotsCopy.explainer;
-    if (defendantEl) defendantEl.textContent = dl ? DL_COPY.defendant : shotsCopy.defendant;
+    if (noticeGj) noticeGj.hidden = !gj;
+    if (explainerEl) explainerEl.innerHTML = gj ? GJ_COPY.explainer : dl ? DL_COPY.explainer : shotsCopy.explainer;
+    if (defendantEl) defendantEl.textContent = gj ? GJ_COPY.defendant : dl ? DL_COPY.defendant : shotsCopy.defendant;
     if (noEvidenceTextEl) noEvidenceTextEl.innerHTML = dl ? DL_COPY.noEvidence : shotsCopy.noEvidence;
-    if (cliOnlyEl) cliOnlyEl.innerHTML = dl ? DL_COPY.cliOnly : shotsCopy.cliOnly;
+    if (cliOnlyEl) cliOnlyEl.innerHTML = gj ? GJ_COPY.cliOnly : dl ? DL_COPY.cliOnly : shotsCopy.cliOnly;
   }
   courtButtons.forEach(function (b) {
     b.addEventListener("click", function () {
@@ -1429,12 +1570,25 @@ function initDemo() {
 
   btn.addEventListener("click", function () {
     if (typeof window.showDirectoryPicker === "function") {
-      var scan = currentCourt === "downloads" ? scanDownloadsWithPicker : scanWithPicker;
+      var scan = currentCourt === "grandjury" ? scanGjShotsWithPicker
+        : currentCourt === "downloads" ? scanDownloadsWithPicker : scanWithPicker;
       scan().catch(function () { setStatus(""); }); /* cancel: silent */
     } else {
+      pendingPick = currentCourt === "grandjury" ? "gjShots" : "main";
       input.click();
     }
   });
+
+  if (btn2) {
+    btn2.addEventListener("click", function () {
+      if (typeof window.showDirectoryPicker === "function") {
+        scanGjDownloadsWithPicker().catch(function () { setStatus(""); }); /* cancel: silent */
+      } else {
+        pendingPick = "gjDl";
+        input.click();
+      }
+    });
+  }
 
   /* The sample defendant: a synthetic folder through the same
    * computeStats / plea / render path as a real one, for browsers
@@ -1442,6 +1596,16 @@ function initDemo() {
   var sampleBtn = document.getElementById("sampleBtn");
   if (sampleBtn) {
     sampleBtn.addEventListener("click", function () {
+      if (currentCourt === "grandjury") {
+        gjShotsStats = computeStats(makeSampleFiles());
+        gjDlStats = computeDownloadsStats(makeSampleDownloadsFiles());
+        gjShotsSample = true;
+        gjDlSample = true;
+        setStatus("");
+        renderGrandJury();
+        gjResult.scrollIntoView({ behavior: "smooth", block: "start" });
+        return;
+      }
       if (currentCourt === "downloads") {
         var dlStats = computeDownloadsStats(makeSampleDownloadsFiles());
         currentStats = dlStats;
@@ -1463,7 +1627,12 @@ function initDemo() {
   input.addEventListener("change", function () {
     if (!input.files || input.files.length === 0) return;
     var picked = Array.prototype.slice.call(input.files, 0, MAX_SCANNED);
-    if (currentCourt === "downloads") {
+    /* The pick belongs to whichever button opened the control: a
+     * single-court hearing, or one side of the grand jury. */
+    var target = pendingPick ||
+      (currentCourt === "grandjury" ? "gjShots" : "main");
+    pendingPick = null;
+    if (target === "gjDl" || (target === "main" && currentCourt === "downloads")) {
       /* The docket judges the surface only: files exactly one level
        * below the picked folder, nothing deeper. */
       var dlCandidates = [];
@@ -1472,7 +1641,8 @@ function initDemo() {
           dlCandidates.push(picked[j]);
         }
       }
-      finishDownloadsScan(dlCandidates);
+      if (target === "gjDl") finishGjDownloadsScan(dlCandidates);
+      else finishDownloadsScan(dlCandidates);
       input.value = "";
       return;
     }
@@ -1483,7 +1653,8 @@ function initDemo() {
       var parent = parts.length >= 2 ? parts[parts.length - 2] : "";
       if (isScreenshotFile(file.name, parent)) candidates.push(file);
     }
-    finishScan(candidates);
+    if (target === "gjShots") finishGjShotsScan(candidates);
+    else finishScan(candidates);
     input.value = "";
   });
 
@@ -1521,6 +1692,25 @@ function initDemo() {
 
   async function handleDrop(dataTransfer) {
     if (!dataTransfer) return;
+    if (currentCourt === "grandjury") {
+      /* A drop in grand jury mode fills the first side still
+       * waiting for its folder: screenshots first, then downloads,
+       * each scanned by its own court's rules. */
+      if (!gjShotsStats) {
+        await handleDropFor(dataTransfer, "screenshots",
+          finishGjShotsScan, finishGjDownloadsScan);
+      } else {
+        await handleDropFor(dataTransfer, "downloads",
+          finishGjShotsScan, finishGjDownloadsScan);
+      }
+      return;
+    }
+    await handleDropFor(dataTransfer, currentCourt,
+      finishScan, finishDownloadsScan);
+  }
+
+  async function handleDropFor(dataTransfer, court, finishShots, finishDl) {
+    if (!dataTransfer) return;
     var entries = [];
     if (dataTransfer.items) {
       for (var i = 0; i < dataTransfer.items.length; i++) {
@@ -1536,19 +1726,19 @@ function initDemo() {
        * flat list is all surface, so the docket takes every file. */
       if (dataTransfer.files && dataTransfer.files.length > 0) {
         var picked = Array.prototype.slice.call(dataTransfer.files, 0, MAX_SCANNED);
-        if (currentCourt === "downloads") {
-          await finishDownloadsScan(picked);
+        if (court === "downloads") {
+          await finishDl(picked);
           return;
         }
         var flat = [];
         for (var p = 0; p < picked.length; p++) {
           if (isScreenshotFile(picked[p].name, "")) flat.push(picked[p]);
         }
-        await finishScan(flat);
+        await finishShots(flat);
       }
       return;
     }
-    if (currentCourt === "downloads") {
+    if (court === "downloads") {
       /* The docket reads the surface of a dropped folder: its own
        * files, and nothing from any subfolder. */
       var dlCandidates = [];
@@ -1584,7 +1774,7 @@ function initDemo() {
       for (var de = 0; de < entries.length; de++) {
         await traverseDownloads(entries[de]);
       }
-      await finishDownloadsScan(dlCandidates);
+      await finishDl(dlCandidates);
       return;
     }
     var candidates = [];
@@ -1615,7 +1805,7 @@ function initDemo() {
     for (var e = 0; e < entries.length; e++) {
       await traverse(entries[e], "", 0);
     }
-    await finishScan(candidates);
+    await finishShots(candidates);
   }
 
   /* --- actions ------------------------------------------------------ */
@@ -1664,6 +1854,59 @@ function initDemo() {
     }
   });
 
+  /* --- the grand jury's card actions --------------------------------- */
+
+  var gjDownloadBtn = document.getElementById("gjDownloadCard");
+  if (gjDownloadBtn) {
+    gjDownloadBtn.addEventListener("click", function () {
+      var canvas = document.getElementById("gjCard");
+      if (canvas && canvas.toBlob) {
+        canvas.toBlob(function (blob) {
+          if (!blob) return;
+          var a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = "snap-judgment-full-docket.png";
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(function () {
+            URL.revokeObjectURL(a.href);
+            a.remove();
+          }, 500);
+        }, "image/png");
+      }
+    });
+  }
+
+  function gjCopyVerdict() {
+    if (!gjShotsStats || !gjDlStats) return;
+    var text = grandJuryPostText(gjShotsStats, gjDlStats);
+    var done = function () { setStatus("Full docket copied. Post it anywhere."); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text); done(); });
+    } else {
+      fallbackCopy(text); done();
+    }
+  }
+
+  var gjCopyBtn = document.getElementById("gjCopyVerdict");
+  if (gjCopyBtn) gjCopyBtn.addEventListener("click", gjCopyVerdict);
+
+  var gjShareBtn = document.getElementById("gjShareVerdict");
+  if (gjShareBtn) {
+    gjShareBtn.addEventListener("click", function () {
+      if (!gjShotsStats || !gjDlStats) return;
+      if (typeof navigator.share === "function") {
+        navigator.share({
+          title: "Snap Judgment",
+          text: grandJuryPostText(gjShotsStats, gjDlStats),
+          url: DEMO_URL
+        }).catch(function () { /* user dismissed the share sheet */ });
+      } else {
+        gjCopyVerdict();
+      }
+    });
+  }
+
   function fallbackCopy(text) {
     var ta = document.createElement("textarea");
     ta.value = text;
@@ -1683,7 +1926,9 @@ function initDemo() {
       judgeButtons.forEach(function (other) {
         other.classList.toggle("active", other === b);
       });
-      if (currentStats && currentStats.count > 0) {
+      if (currentCourt === "grandjury") {
+        if (gjShotsStats || gjDlStats) renderGrandJury();
+      } else if (currentStats && currentStats.count > 0) {
         renderSentence(currentStats);
         drawCurrentCard(currentStats);
       }
@@ -1710,7 +1955,11 @@ function initDemo() {
     roastRange.addEventListener("input", function () {
       currentIntensity = Number(roastRange.value);
       syncRoastBand();
-      if (currentStats && currentStats.count > 0) renderCommentary(currentStats);
+      if (currentCourt === "grandjury") {
+        if (gjShotsStats || gjDlStats) renderGrandJury();
+      } else if (currentStats && currentStats.count > 0) {
+        renderCommentary(currentStats);
+      }
     });
   }
   syncRoastBand();
@@ -1727,7 +1976,7 @@ function initDemo() {
 
   /* --- scanning ------------------------------------------------------- */
 
-  async function scanWithPicker() {
+  async function scanWithPickerFor(finish) {
     var dir = await window.showDirectoryPicker();
     var candidates = [];
     var scanned = 0;
@@ -1745,10 +1994,15 @@ function initDemo() {
     }
     setStatus("Reading the evidence...");
     await walk(dir, dir.name, 0);
-    await finishScan(candidates);
+    await finish(candidates);
   }
 
-  async function finishScan(candidateFiles) {
+  async function scanWithPicker() { await scanWithPickerFor(finishScan); }
+  async function scanGjShotsWithPicker() { await scanWithPickerFor(finishGjShotsScan); }
+
+  /* Read the header records for a set of screenshot candidates, in
+   * batches, with progress on the status line. */
+  async function readAllRecords(candidateFiles) {
     setStatus("Reading the evidence: " + candidateFiles.length + " screenshots found...");
     var records = [];
     var BATCH = 32;
@@ -1761,6 +2015,11 @@ function initDemo() {
           candidateFiles.length + " screenshots examined...");
       }
     }
+    return records;
+  }
+
+  async function finishScan(candidateFiles) {
+    var records = await readAllRecords(candidateFiles);
     var stats = computeStats(records);
     stats.pleaBargain = computePleaBargain(records, 2);
     currentStats = stats;
@@ -1769,10 +2028,19 @@ function initDemo() {
     render(stats);
   }
 
+  async function finishGjShotsScan(candidateFiles) {
+    var records = await readAllRecords(candidateFiles);
+    gjShotsStats = computeStats(records);
+    gjShotsSample = false;
+    setStatus("");
+    renderGrandJury();
+    gjResult.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
   /* The docket's picker scan: the picked folder's own files only.
    * Subfolders are not entered, and nothing is read from any file:
    * the File objects' name, size, and lastModified are the evidence. */
-  async function scanDownloadsWithPicker() {
+  async function scanDownloadsWithPickerFor(finish) {
     var dir = await window.showDirectoryPicker();
     var candidates = [];
     var scanned = 0;
@@ -1784,19 +2052,39 @@ function initDemo() {
         candidates.push(await entry.getFile());
       }
     }
-    await finishDownloadsScan(candidates);
+    await finish(candidates);
+  }
+
+  async function scanDownloadsWithPicker() {
+    await scanDownloadsWithPickerFor(finishDownloadsScan);
+  }
+  async function scanGjDownloadsWithPicker() {
+    await scanDownloadsWithPickerFor(finishGjDownloadsScan);
+  }
+
+  /* The docket's records: name, size, and lastModified, nothing else. */
+  function dlRecordsOf(candidateFiles) {
+    return candidateFiles.map(function (f) {
+      return { name: f.name, size: f.size, mtime: f.lastModified };
+    });
   }
 
   async function finishDownloadsScan(candidateFiles) {
     setStatus("Reading the evidence: " + candidateFiles.length + " files found...");
-    var records = candidateFiles.map(function (f) {
-      return { name: f.name, size: f.size, mtime: f.lastModified };
-    });
-    var stats = computeDownloadsStats(records);
+    var stats = computeDownloadsStats(dlRecordsOf(candidateFiles));
     currentStats = stats;
     currentSample = false;
     setStatus("");
     render(stats);
+  }
+
+  async function finishGjDownloadsScan(candidateFiles) {
+    setStatus("Reading the evidence: " + candidateFiles.length + " files found...");
+    gjDlStats = computeDownloadsStats(dlRecordsOf(candidateFiles));
+    gjDlSample = false;
+    setStatus("");
+    renderGrandJury();
+    gjResult.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   async function readRecord(file) {
@@ -1948,6 +2236,191 @@ function initDemo() {
     drawDownloadsCard(stats);
     result.hidden = false;
     result.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  /* --- the grand jury's hearing page ----------------------------------
+   * Each court's compact block lands as soon as its folder does;
+   * until both are in, a note names the folder the court is still
+   * waiting for. With both in, the FULL DOCKET closes the hearing:
+   * combined files and size, both verdicts, the standing line in the
+   * presiding judge's voice, and the combined share card. */
+
+  function renderGrandJury() {
+    if (!gjShotsStats && !gjDlStats) {
+      gjResult.hidden = true;
+      return;
+    }
+    var judgeEl = document.getElementById("gjJudgeName");
+    if (judgeEl) judgeEl.textContent = JUDGE_NAMES[currentVoice] + " presiding.";
+    var banner = document.getElementById("gjSampleBanner");
+    if (banner) banner.hidden = !(gjShotsSample || gjDlSample);
+    renderGjBlock(document.getElementById("gjShotsBlock"), gjShotsStats, "screenshots");
+    renderGjBlock(document.getElementById("gjDlBlock"), gjDlStats, "downloads");
+
+    var waiting = document.getElementById("gjWaiting");
+    var docket = document.getElementById("gjDocket");
+    if (gjShotsStats && gjDlStats) {
+      waiting.hidden = true;
+      docket.hidden = false;
+      var totals = combinedTotals(gjShotsStats, gjDlStats);
+      var rows = [
+        ["Combined files", totals.files.toLocaleString("en-US")],
+        ["Combined size", totals.human + " (" + totals.bytes.toLocaleString("en-US") + " bytes)"],
+        ["Screenshots verdict", gjShotsStats.tier],
+        ["Downloads verdict", gjDlStats.tier]
+      ];
+      var tbody = document.getElementById("gjDocketBody");
+      tbody.innerHTML = "";
+      rows.forEach(function (r) {
+        var tr = document.createElement("tr");
+        var th = document.createElement("th"); th.textContent = r[0];
+        var td = document.createElement("td"); td.textContent = r[1];
+        tr.appendChild(th); tr.appendChild(td);
+        tbody.appendChild(tr);
+      });
+      document.getElementById("gjStanding").textContent =
+        grandJuryStanding(gjShotsStats, gjDlStats, currentVoice);
+      var xLink = document.getElementById("gjPostToX");
+      if (xLink) {
+        xLink.href = "https://twitter.com/intent/tweet?text=" +
+          encodeURIComponent(grandJuryPostText(gjShotsStats, gjDlStats));
+      }
+      drawGrandJuryCard();
+    } else {
+      docket.hidden = true;
+      waiting.hidden = false;
+      waiting.textContent = gjShotsStats
+        ? "One court has ruled. The grand jury is still waiting for your Downloads " +
+          "folder: use button 2 above, and the full docket will be entered."
+        : "One court has ruled. The grand jury is still waiting for your screenshots " +
+          "folder: use button 1 above, and the full docket will be entered.";
+    }
+    gjResult.hidden = false;
+  }
+
+  /* One court's compact block, mirroring the CLI's grand jury
+   * blocks: verdict, the count and span of the evidence, the
+   * sentence, the awards by name, and the court's commentary at the
+   * current roast intensity. */
+  function renderGjBlock(box, stats, court) {
+    if (!box) return;
+    box.innerHTML = "";
+    if (!stats) { box.hidden = true; return; }
+    box.hidden = false;
+    var dl = court === "downloads";
+    var h = document.createElement("h2");
+    h.className = "verdict";
+    h.textContent = dl ? "The Downloads Docket" : "The Screenshots Court";
+    box.appendChild(h);
+    var tier = document.createElement("div");
+    tier.className = "gj-tier";
+    tier.textContent = stats.tier;
+    box.appendChild(tier);
+    if (stats.count === 0) {
+      var none = document.createElement("p");
+      none.textContent = dl
+        ? "No files were produced as evidence."
+        : "No screenshots were produced as evidence.";
+      box.appendChild(none);
+      return;
+    }
+    var summary = document.createElement("p");
+    summary.textContent = stats.count.toLocaleString("en-US") +
+      (dl ? " files, " : " screenshots, ") + stats.totalSizeHuman +
+      " of evidence, spanning " + stats.spanStartLabel + " to " +
+      stats.spanEndLabel + ".";
+    box.appendChild(summary);
+    var sentence = document.createElement("p");
+    sentence.className = "gj-sentence";
+    sentence.textContent = dl
+      ? downloadsSentenceFor(stats.tier, currentVoice)
+      : sentenceFor(stats.tier, currentVoice);
+    box.appendChild(sentence);
+    var awards = document.createElement("p");
+    awards.textContent = "Awards: " + (stats.awards.length > 0
+      ? stats.awards.map(function (a) { return a.name; }).join(", ")
+      : "none");
+    box.appendChild(awards);
+    var ch = document.createElement("h3");
+    ch.textContent = "Court Commentary";
+    box.appendChild(ch);
+    var cl = document.createElement("p");
+    cl.className = "gj-commentary";
+    cl.textContent = dl
+      ? downloadsCommentary(stats, intensityBand(currentIntensity).level)
+      : courtCommentary(stats, intensityBand(currentIntensity).level);
+    box.appendChild(cl);
+  }
+
+  /* The FULL DOCKET share card: the demo cards' layout carrying
+   * both verdicts, the combined size, and the first award from
+   * each court. */
+  function drawGrandJuryCard() {
+    var canvas = document.getElementById("gjCard");
+    if (!canvas) return;
+    var ctx = canvas.getContext("2d");
+    var W = 1200, H = 630;
+    var shots = gjShotsStats, dl = gjDlStats;
+    var totals = combinedTotals(shots, dl);
+    ctx.fillStyle = "#101014";
+    ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = "#d4af37";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(18, 18, W - 36, H - 36);
+    ctx.textAlign = "center";
+
+    try { ctx.letterSpacing = "5px"; } catch (e) { /* cosmetic only */ }
+    ctx.fillStyle = "#d4af37";
+    ctx.font = "600 25px Georgia, 'Times New Roman', serif";
+    ctx.fillText("SNAP JUDGMENT - THE FULL DOCKET", W / 2, 78);
+
+    try { ctx.letterSpacing = "2px"; } catch (e) { /* cosmetic only */ }
+    ctx.fillStyle = "#f5f2ea";
+    ctx.font = "bold 84px Arial, Helvetica, sans-serif";
+    ctx.fillText("SNAP JUDGMENT", W / 2, 172);
+
+    function tierLine(tier, y) {
+      ctx.fillStyle = "#d4af37";
+      var size = 46;
+      ctx.font = "bold " + size + "px Arial, Helvetica, sans-serif";
+      while (ctx.measureText(tier).width > W - 140 && size > 24) {
+        size -= 4;
+        ctx.font = "bold " + size + "px Arial, Helvetica, sans-serif";
+      }
+      ctx.fillText(tier, W / 2, y);
+    }
+    function countLine(text, y) {
+      ctx.fillStyle = "#f5f2ea";
+      ctx.font = "27px Arial, Helvetica, sans-serif";
+      ctx.fillText(text, W / 2, y);
+    }
+    tierLine(shots.tier, 248);
+    countLine(shots.count.toLocaleString("en-US") + " screenshots", 284);
+    tierLine(dl.tier, 344);
+    countLine(dl.count.toLocaleString("en-US") + " files", 380);
+
+    ctx.strokeStyle = "#4a4638";
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(240, 412); ctx.lineTo(W - 240, 412); ctx.stroke();
+
+    ctx.fillStyle = "#f5f2ea";
+    ctx.font = "33px Menlo, Consolas, monospace";
+    ctx.fillText(totals.files.toLocaleString("en-US") + " files - " +
+      totals.human + " combined", W / 2, 466);
+
+    var names = [];
+    if (shots.awards.length > 0) names.push(shots.awards[0].name);
+    if (dl.awards.length > 0) names.push(dl.awards[0].name);
+    ctx.fillStyle = "#e8e3d8";
+    ctx.font = "25px Arial, Helvetica, sans-serif";
+    ctx.fillText("Awards: " + (names.length > 0 ? names.join(", ") : "none"), W / 2, 514);
+
+    ctx.fillStyle = "#8f8b7d";
+    ctx.font = "22px Arial, Helvetica, sans-serif";
+    ctx.fillText("Judged from file metadata only. No pixels were read, and no file was opened.", W / 2, 574);
+    ctx.fillStyle = "#d4af37";
+    ctx.font = "600 23px Menlo, Consolas, monospace";
+    ctx.fillText("pip install snap-judgment", W / 2, 602);
   }
 
   function renderExhibits(stats) {

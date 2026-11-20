@@ -754,4 +754,84 @@ check("downloads scan keeps only top-level files", () => {
   assert.strictEqual(demo.isTopLevelPath(""), true);
 });
 
+/* --- the Grand Jury ----------------------------------------------------- */
+
+check("grand jury: combined totals add both courts together", () => {
+  const s = demo.computeStats(shots(60));
+  const d = demo.computeDownloadsStats(dlFiles(30), DL_NOW);
+  const t = demo.combinedTotals(s, d);
+  assert.strictEqual(t.files, 90);
+  assert.strictEqual(t.bytes, s.totalBytes + d.totalBytes);
+  assert.strictEqual(t.human, demo.dlHumanBytes(t.bytes));
+  /* A court that has not sat yet adds nothing. */
+  const oneSide = demo.combinedTotals(s, null);
+  assert.strictEqual(oneSide.files, 60);
+  assert.strictEqual(oneSide.bytes, s.totalBytes);
+  assert.deepStrictEqual(demo.combinedTotals(null, null),
+    { files: 0, bytes: 0, human: "0 B" });
+});
+
+check("grand jury standing: low, high, and mixed pairs pick the right class", () => {
+  const lowS = demo.computeStats(shots(10));                    /* Innocent Bystander, rank 0 */
+  const lowD = demo.computeDownloadsStats(dlFiles(10), DL_NOW); /* Tidy Desk, rank 0 */
+  assert.strictEqual(demo.grandJuryStanding(lowS, lowD, "fair"),
+    "The court finds little to prosecute. Both folders are disappointingly tidy, " +
+    "and the court accepts the disappointment.");
+  const highS = demo.computeStats(shots(2600));                 /* Unrepentant Screenshot Felon, rank 5 */
+  const highD = demo.computeDownloadsStats(dlFiles(1200), DL_NOW); /* Superfund Site, rank 5 */
+  assert.strictEqual(demo.grandJuryStanding(highS, highD, "fair"),
+    "The court has seen enough. Two folders, two crime scenes, one defendant. " +
+    "The full docket is an archive of good intentions and no deletions.");
+  /* A split docket names the heavier folder. */
+  assert.ok(demo.grandJuryStanding(highS, lowD, "fair")
+    .includes("lands on the screenshots folder"));
+  assert.ok(demo.grandJuryStanding(lowS, highD, "fair")
+    .includes("lands on the downloads folder"));
+  /* Tied severities name both folders. */
+  const tieS = demo.computeStats(shots(250));                   /* Repeat Offender, rank 2 */
+  const tieD = demo.computeDownloadsStats(dlFiles(150), DL_NOW); /* Digital Junk Drawer, rank 2 */
+  assert.strictEqual(demo.grandJuryStanding(tieS, tieD, "fair"),
+    "The court's verdict is split, and the weight of it lands on both folders. " +
+    "The sentence falls where the evidence is heaviest.");
+});
+
+check("grand jury standing: the other voices and No Evidence ranks", () => {
+  const none = demo.computeStats([]);                           /* No Evidence, rank -1 */
+  const lowD = demo.computeDownloadsStats(dlFiles(10), DL_NOW); /* Tidy Desk, rank 0 */
+  /* No Evidence beside a bottom tier is still a low pair. */
+  assert.strictEqual(demo.grandJuryStanding(none, lowD, "strict"),
+    "The court searched both folders for a case and found only housekeeping. " +
+    "Suspiciously clean. Both folders remain under observation.");
+  const highS = demo.computeStats(shots(2600));
+  assert.ok(demo.grandJuryStanding(highS, none, "lenient")
+    .includes("the heavier heart belongs to the screenshots folder"));
+  const highD = demo.computeDownloadsStats(dlFiles(1200), DL_NOW);
+  assert.strictEqual(demo.grandJuryStanding(highS, highD, "lenient"),
+    "The court loves a rich archive, and this is two of them at once. Nothing " +
+    "here is a crime; it is simply a great deal of keeping, in stereo.");
+  /* Null stats (a court that has not sat) count as No Evidence too. */
+  assert.strictEqual(demo.grandJuryStanding(null, lowD, "fair"),
+    demo.grandJuryStanding(none, lowD, "fair"));
+});
+
+check("grand jury: the two sample defendants together", () => {
+  const s = demo.computeStats(demo.makeSampleFiles(DL_NOW), DL_NOW);
+  const d = demo.computeDownloadsStats(demo.makeSampleDownloadsFiles(DL_NOW), DL_NOW);
+  assert.strictEqual(s.tier, "Repeat Offender");
+  assert.strictEqual(d.tier, "Digital Junk Drawer");
+  const t = demo.combinedTotals(s, d);
+  assert.strictEqual(t.files, 460);
+  assert.strictEqual(t.bytes, s.totalBytes + d.totalBytes);
+  /* Repeat Offender (rank 2) beside Digital Junk Drawer (rank 2): a
+   * split docket, tied, so the weight lands on both folders. */
+  assert.strictEqual(demo.grandJuryStanding(s, d, "fair"),
+    "The court's verdict is split, and the weight of it lands on both folders. " +
+    "The sentence falls where the evidence is heaviest.");
+  const post = demo.grandJuryPostText(s, d);
+  assert.ok(post.startsWith("I convened the Grand Jury on my folders: " +
+    "340 screenshots (Repeat Offender) and 120 downloads files (Digital Junk Drawer)."));
+  assert.ok(post.includes("The full docket: 460 files, "));
+  assert.ok(post.includes("Judged from metadata only."));
+});
+
 console.log("\n" + passed + " test groups passed.");

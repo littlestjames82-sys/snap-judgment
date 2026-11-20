@@ -4,6 +4,35 @@ All notable changes to Snap Judgment are recorded here. Versions are the
 tool's own; the record is the record. Every version below shipped on
 November 19, 2026 - it was that kind of day in court.
 
+## 0.12.0 - 2026-11-20
+
+- The trend: `--trend` records the current hearing first, then
+  reports the court record for the same folders and court instead
+  of the full report: the hearing count, the first and latest
+  counts with the signed delta and percent, the first and latest
+  verdicts, and a sparkline of the counts across every hearing,
+  scaled from the smallest hearing to the largest. A first hearing
+  says so, gives today's numbers, and draws its single bar at full
+  height. `--json` adds a `trend` object beside the usual report,
+  the Markdown report gains a `## Trend` section with the sparkline
+  in a code block, and the section composes with `--judge` and
+  `--intensity` as usual. The trend refuses `--vs`, `--vs-year`,
+  `--rematch`, `--grand-jury`, `--plea-bargain`, and
+  `--wrapped-kit` with a plain error: a trend is one folder set's
+  own history in one court, and those are different proceedings.
+- Co-defendants in the docket: `--vs FOLDER` now works in the
+  downloads court. Both folders are judged by the docket and
+  compared in one block: both verdicts, the file counts and total
+  sizes with the signed delta between them, the per-folder award
+  counts, and a closing line that names the bigger offender and
+  states the ground it rests on: tier severity on the docket's
+  ladder first, then count, then total size, with a dead heat
+  declared when all three are level. `--json` nests both downloads
+  objects under `versus` with `worse_offender`, the same shape the
+  screenshots court uses, and the Markdown report gains the
+  comparison table. `--vs-year` stays a screenshots-court
+  proceeding and is still refused in the docket.
+
 ## 0.11.0 - 2026-11-20
 
 - The Grand Jury: `--grand-jury` convenes both courts in one hearing.

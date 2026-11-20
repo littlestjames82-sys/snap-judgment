@@ -45,7 +45,7 @@ try:
 except ModuleNotFoundError:  # Python 3.9 and 3.10 have no tomllib
     tomllib = None
 
-__version__ = "0.11.0"
+__version__ = "0.12.0"
 
 # ---------------------------------------------------------------------------
 # detection
@@ -1865,7 +1865,9 @@ def render_downloads_markdown(stats: dict, tier: str, sentence: str,
                               commentary: str | None = None,
                               year: int | None = None,
                               rematch: dict | None = None,
-                              rematch_requested: bool = False) -> str:
+                              rematch_requested: bool = False,
+                              versus: dict | None = None,
+                              trend: dict | None = None) -> str:
     out = [
         "# Snap Judgment - The Downloads Docket",
         "",
@@ -1896,6 +1898,27 @@ def render_downloads_markdown(stats: dict, tier: str, sentence: str,
     out += ["", "## The Sentence", "", sentence, ""]
     if commentary is not None:
         out += ["## Court Commentary", "", commentary, ""]
+    if versus is not None:
+        vs_stats, vs_tier = versus["stats"], versus["tier"]
+        out += [
+            "## Co-Defendant Comparison",
+            "",
+            "| | Defendant | Co-defendant |",
+            "| --- | --- | --- |",
+        ]
+        for label, main_value, vs_value in _downloads_comparison_rows(
+            stats, tier, vs_stats, vs_tier, awards, versus["awards"]
+        ):
+            out.append(f"| {label} | {main_value} | {vs_value} |")
+        out += [
+            "",
+            _downloads_delta_line(stats, vs_stats),
+            "",
+            _downloads_comparison_closing(
+                stats, tier, vs_stats, vs_tier, versus["worse"]
+            ),
+            "",
+        ]
     if rematch_requested:
         out += ["## Rematch", ""]
         if rematch is None:
@@ -1903,6 +1926,8 @@ def render_downloads_markdown(stats: dict, tier: str, sentence: str,
         else:
             out.append(downloads_rematch_line(rematch, tier))
         out.append("")
+    if trend is not None:
+        out += render_trend_markdown(trend, "files")
     out += [DL_FOOTER, ""]
     return "\n".join(out)
 
@@ -2681,7 +2706,8 @@ def render_markdown(stats: dict, tier: str, sentence: str, awards: list[dict],
                     plea: dict | None = None,
                     rematch: dict | None = None,
                     rematch_requested: bool = False,
-                    commentary: str | None = None) -> str:
+                    commentary: str | None = None,
+                    trend: dict | None = None) -> str:
     out = [
         "# Snap Judgment",
         "",
@@ -2827,6 +2853,8 @@ def render_markdown(stats: dict, tier: str, sentence: str, awards: list[dict],
         else:
             out.append(rematch_line(rematch, tier))
         out.append("")
+    if trend is not None:
+        out += [""] + render_trend_markdown(trend, "screenshots")
     return "\n".join(out)
 
 
@@ -3729,6 +3757,261 @@ def render_history(records: list[dict]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# the trend: the court record for one folder set, visualized
+# ---------------------------------------------------------------------------
+
+SPARK_BLOCKS = "▁▂▃▄▅▆▇█"
+
+
+def sparkline(counts: list[int]) -> str:
+    """A sparkline of hearing counts, scaled min to max across the
+    eight block heights. A flat series (a single hearing included)
+    draws at full height."""
+    if not counts:
+        return ""
+    low, high = min(counts), max(counts)
+    if high == low:
+        return SPARK_BLOCKS[-1] * len(counts)
+    span = high - low
+    return "".join(
+        SPARK_BLOCKS[round((count - low) / span * 7)] for count in counts
+    )
+
+
+def build_trend(records: list[dict], folder_names: list[str], court: str,
+                today_record: dict | None = None) -> dict | None:
+    """The trend of the court record for one folder set in one court:
+    every recorded hearing whose folder set matches exactly and whose
+    court matches, oldest first. Records without a court field belong
+    to the screenshots court. `today_record`, when given, is this run's
+    own hearing: it is appended to the selection when the record on
+    disk does not already end with it (the caller records the hearing
+    first; this keeps the trend honest even if that write failed).
+    None when no hearing is on record at all."""
+    selected = []
+    for record in records:
+        if (record.get("court") or "screenshots") != court:
+            continue
+        rec_folders = record.get("folders") or []
+        if sorted(rec_folders) == sorted(folder_names):
+            selected.append(record)
+    if today_record is not None:
+        stamp = today_record.get("timestamp")
+        if not selected or selected[-1].get("timestamp") != stamp:
+            selected.append(today_record)
+    hearings = []
+    for record in selected:
+        try:
+            hearings.append({
+                "count": int(record["count"]),
+                "tier": str(record["verdict"]),
+                "date": datetime.fromisoformat(
+                    record["timestamp"]
+                ).date(),
+            })
+        except Exception:
+            continue
+    if not hearings:
+        return None
+    counts = [hearing["count"] for hearing in hearings]
+    first_count, latest_count = counts[0], counts[-1]
+    delta = latest_count - first_count
+    delta_pct = (
+        round(100.0 * delta / first_count, 1) if first_count else 0.0
+    )
+    return {
+        "hearings": len(hearings),
+        "counts": counts,
+        "tiers": [hearing["tier"] for hearing in hearings],
+        "first_count": first_count,
+        "latest_count": latest_count,
+        "delta": delta,
+        "delta_pct": delta_pct,
+        "first_tier": hearings[0]["tier"],
+        "latest_tier": hearings[-1]["tier"],
+        "first_date": hearings[0]["date"],
+        "latest_date": hearings[-1]["date"],
+        "sparkline": sparkline(counts),
+    }
+
+
+def trend_json(trend: dict) -> dict:
+    """The trend as it appears under the "trend" key in --json."""
+    return {
+        "hearings": trend["hearings"],
+        "counts": trend["counts"],
+        "tiers": trend["tiers"],
+        "first_count": trend["first_count"],
+        "latest_count": trend["latest_count"],
+        "delta": trend["delta"],
+        "delta_pct": trend["delta_pct"],
+    }
+
+
+def _trend_facts(trend: dict, unit: str) -> list[str]:
+    """The trend's facts, one per line, shared by the terminal
+    section and the Markdown section. `unit` is "screenshots" or
+    "files"."""
+    if trend["hearings"] <= 1:
+        return [
+            "This is the first hearing on record.",
+            f"Count: {trend['latest_count']:,} {unit}, "
+            f"verdict {trend['latest_tier']}.",
+        ]
+    delta = trend["delta"]
+    delta_text = f"{delta:+,}" if delta else "0"
+    pct_text = ""
+    if trend["first_count"]:
+        pct_text = f", {trend['delta_pct']:+.1f}%"
+    return [
+        f"Hearings on record: {trend['hearings']} "
+        f"({_fmt_date(trend['first_date'])} - "
+        f"{_fmt_date(trend['latest_date'])})",
+        f"Count: {trend['first_count']:,} -> "
+        f"{trend['latest_count']:,} {unit} ({delta_text}{pct_text})",
+        f"Verdict: {trend['first_tier']} -> {trend['latest_tier']}",
+    ]
+
+
+def render_trend_section(trend: dict, unit: str,
+                         folder_names: list[str] | None = None,
+                         commentary: str | None = None) -> str:
+    """The terminal TREND section printed by a --trend run."""
+    out = ["TREND"]
+    if folder_names:
+        label = "Folder" if len(folder_names) == 1 else "Folders"
+        out.append(f"  {label}: {', '.join(folder_names)}")
+    for line in _trend_facts(trend, unit):
+        out.append(f"  {line}")
+    out.append(f"  {trend['sparkline']}")
+    if trend["hearings"] <= 1:
+        out.append("  (one hearing on record)")
+    if commentary is not None:
+        out.append(f"  COMMENTARY: {commentary}")
+    out.append("")
+    return "\n".join(out)
+
+
+def render_trend_markdown(trend: dict, unit: str) -> list[str]:
+    """The '## Trend' section lines for a Markdown report."""
+    out = ["## Trend", ""]
+    out += _trend_facts(trend, unit)
+    out += ["", "```", trend["sparkline"], "```"]
+    if trend["hearings"] <= 1:
+        out.append("(one hearing on record)")
+    out.append("")
+    return out
+
+
+# ---------------------------------------------------------------------------
+# the downloads docket tries a co-defendant
+# ---------------------------------------------------------------------------
+
+def downloads_worse_offender(main_stats: dict, main_tier: str,
+                             vs_stats: dict, vs_tier: str) -> str:
+    """Who is guiltier in the docket: 'main', 'vs', or 'tie'.
+    Tier severity first, then count, then total size."""
+    main_rank = DL_TIER_RANKS.get(_normalize_tier_name(main_tier), -1)
+    vs_rank = DL_TIER_RANKS.get(_normalize_tier_name(vs_tier), -1)
+    if main_rank != vs_rank:
+        return "main" if main_rank > vs_rank else "vs"
+    if main_stats["count"] != vs_stats["count"]:
+        return "main" if main_stats["count"] > vs_stats["count"] else "vs"
+    if main_stats["total_bytes"] != vs_stats["total_bytes"]:
+        return (
+            "main" if main_stats["total_bytes"] > vs_stats["total_bytes"]
+            else "vs"
+        )
+    return "tie"
+
+
+def _downloads_comparison_closing(main_stats: dict, main_tier: str,
+                                  vs_stats: dict, vs_tier: str,
+                                  worse: str) -> str:
+    """The closing line of a downloads co-defendant comparison; it
+    states the ground the decision rests on."""
+    if worse == "tie":
+        return (
+            "Dead heat: same verdict, same count, same size. "
+            "The court cannot separate them."
+        )
+    if worse == "main":
+        who, winner, loser = "the defendant", main_stats, vs_stats
+        winner_tier, loser_tier = main_tier, vs_tier
+    else:
+        who, winner, loser = "the co-defendant", vs_stats, main_stats
+        winner_tier, loser_tier = vs_tier, main_tier
+    if winner_tier != loser_tier:
+        return (
+            f"Bigger offender: {who}, {winner_tier} outranks "
+            f"{loser_tier} on the docket's ladder."
+        )
+    if winner["count"] != loser["count"]:
+        return (
+            f"Bigger offender: {who}, on count with the verdicts "
+            f"level at {winner_tier}: {winner['count']:,} files "
+            f"to {loser['count']:,}."
+        )
+    return (
+        f"Bigger offender: {who}, on total size with verdict and "
+        f"count level: {winner['total_human']} to {loser['total_human']}."
+    )
+
+
+def _downloads_delta_line(main_stats: dict, vs_stats: dict) -> str:
+    """The signed count and size deltas, defendant less co-defendant."""
+    dcount = main_stats["count"] - vs_stats["count"]
+    dbytes = main_stats["total_bytes"] - vs_stats["total_bytes"]
+    count_text = f"{dcount:+,}" if dcount else "0"
+    if dbytes > 0:
+        size_text = f"+{human_bytes(dbytes)}"
+    elif dbytes < 0:
+        size_text = f"-{human_bytes(-dbytes)}"
+    else:
+        size_text = "0 B"
+    return (
+        f"Delta (defendant less co-defendant): {count_text} files, "
+        f"{size_text}."
+    )
+
+
+def _downloads_comparison_rows(main_stats: dict, main_tier: str,
+                               vs_stats: dict, vs_tier: str,
+                               main_awards: list, vs_awards: list,
+                               ) -> list[tuple[str, str, str]]:
+    return [
+        ("Verdict", main_tier, vs_tier),
+        ("Files", f"{main_stats['count']:,}", f"{vs_stats['count']:,}"),
+        ("Total size", main_stats["total_human"],
+         vs_stats["total_human"]),
+        ("Awards", f"{len(main_awards)}", f"{len(vs_awards)}"),
+        ("Oldest file", _fmt_date(main_stats["oldest_date"]),
+         _fmt_date(vs_stats["oldest_date"])),
+    ]
+
+
+def render_downloads_comparison(main_stats: dict, main_tier: str,
+                                main_awards: list, versus: dict) -> str:
+    vs_stats, vs_tier = versus["stats"], versus["tier"]
+    out = [
+        "CO-DEFENDANT COMPARISON",
+        f"  {'':<22} {'Defendant':<30} Co-defendant",
+    ]
+    for label, main_value, vs_value in _downloads_comparison_rows(
+        main_stats, main_tier, vs_stats, vs_tier,
+        main_awards, versus["awards"],
+    ):
+        out.append(f"  {label:<22} {main_value:<30} {vs_value}")
+    out += [
+        "",
+        f"  {_downloads_delta_line(main_stats, vs_stats)}",
+        f"  {_downloads_comparison_closing(main_stats, main_tier, vs_stats, vs_tier, versus['worse'])}",
+        "",
+    ]
+    return "\n".join(out)
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -4079,6 +4362,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rematch", action="store_true",
                         help="compare this hearing against the last court "
                              "record for the same folders")
+    parser.add_argument("--trend", action="store_true",
+                        help="record this hearing, then report the trend "
+                             "of the court record for the same folders "
+                             "and court instead of the full report: "
+                             "hearing count, count and verdict "
+                             "trajectory, and a sparkline of the counts")
     parser.add_argument("--badge", metavar="FILE",
                         help="write a shields-style verdict badge (SVG) "
                              "to FILE")
@@ -4121,7 +4410,6 @@ def _run_downloads_court(args) -> int:
     belong to the screenshots court are refused with a plain error.
     """
     unsupported = [
-        ("--vs", args.vs is not None),
         ("--vs-year", args.vs_year is not None),
         ("--plea-bargain", bool(args.plea_bargain)),
         ("--judge-file", args.judge_file is not None),
@@ -4210,6 +4498,16 @@ def _run_downloads_court(args) -> int:
             return 2
         folders = [default_folder]
 
+    vs_folder = None
+    if args.vs is not None:
+        vs_folder = Path(args.vs).expanduser()
+        if not vs_folder.is_dir():
+            print(
+                f"snapjudgment: folder not found: {args.vs}",
+                file=sys.stderr,
+            )
+            return 2
+
     skipped_box = [0]
     files = collect_downloads(
         folders, skipped=skipped_box, recursive=args.recursive
@@ -4220,6 +4518,22 @@ def _run_downloads_court(args) -> int:
         files = [f for f in files if f.dt.date() >= since_date]
     if until_date is not None:
         files = [f for f in files if f.dt.date() <= until_date]
+
+    vs_files: list = []
+    if vs_folder is not None:
+        vs_files = collect_downloads(
+            [vs_folder], recursive=args.recursive
+        )
+        if year is not None:
+            vs_files = [f for f in vs_files if f.dt.year == year]
+        if since_date is not None:
+            vs_files = [
+                f for f in vs_files if f.dt.date() >= since_date
+            ]
+        if until_date is not None:
+            vs_files = [
+                f for f in vs_files if f.dt.date() <= until_date
+            ]
     folder_names = [str(f) for f in folders]
     folder_stats = [
         {
@@ -4289,6 +4603,14 @@ def _run_downloads_court(args) -> int:
             })
         return 2
 
+    if vs_folder is not None and not vs_files:
+        print(
+            f"snapjudgment: co-defendant folder produced no files: "
+            f"{args.vs}",
+            file=sys.stderr,
+        )
+        return 2
+
     stats = analyze_downloads(files, recursive=args.recursive)
     stats["skipped"] = skipped_box[0]
     tier, sentence = downloads_verdict_for(stats["count"], voice=voice)
@@ -4296,6 +4618,44 @@ def _run_downloads_court(args) -> int:
     commentary = None
     if intensity is not None:
         commentary = downloads_commentary(stats, intensity)
+
+    versus = None
+    if vs_folder is not None:
+        vs_stats = analyze_downloads(vs_files, recursive=args.recursive)
+        vs_tier, vs_sentence = downloads_verdict_for(
+            vs_stats["count"], voice=voice
+        )
+        versus = {
+            "folder": str(vs_folder),
+            "stats": vs_stats,
+            "tier": vs_tier,
+            "sentence": vs_sentence,
+            "awards": compute_downloads_awards(vs_stats),
+            "worse": downloads_worse_offender(
+                stats, tier, vs_stats, vs_tier
+            ),
+        }
+
+    record = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "folders": folder_names,
+        "count": stats["count"],
+        "total_bytes": stats["total_bytes"],
+        "verdict": tier,
+        "judge": judge_label,
+        "court": "downloads",
+    }
+    trend = None
+    history_recorded = False
+    if args.trend:
+        # The hearing is recorded FIRST, so the trend of the court
+        # record includes today; the trend is then read back from
+        # the record itself.
+        append_history(record)
+        history_recorded = True
+        trend = build_trend(
+            read_history(), folder_names, "downloads", record
+        )
 
     cleanup = None
     if args.cleanup_list is not None:
@@ -4370,6 +4730,7 @@ def _run_downloads_court(args) -> int:
                 stats, tier, sentence, awards, voice=voice,
                 commentary=commentary, year=year,
                 rematch=rematch, rematch_requested=args.rematch,
+                versus=versus, trend=trend,
             ),
             encoding="utf-8",
         )
@@ -4389,12 +4750,31 @@ def _run_downloads_court(args) -> int:
         kit_written = [kit_svg, kit_post]
 
     if args.json:
-        data = build_downloads_json(
-            stats, tier, sentence, awards,
+        main_folders_json = (
             stats.get("folders", folder_stats) if args.recursive
-            else folder_stats,
+            else folder_stats
+        )
+        data = build_downloads_json(
+            stats, tier, sentence, awards, main_folders_json,
             judge=judge_label, commentary=commentary,
         )
+        if versus is not None:
+            data["versus"] = {
+                "main": build_downloads_json(
+                    stats, tier, sentence, awards, main_folders_json,
+                    judge=judge_label, commentary=commentary,
+                ),
+                "vs": build_downloads_json(
+                    versus["stats"], versus["tier"],
+                    versus["sentence"], versus["awards"],
+                    [{"path": str(vs_folder),
+                      "count": versus["stats"]["count"]}],
+                    judge=judge_label,
+                ),
+                "worse_offender": versus["worse"],
+            }
+        if trend is not None:
+            data["trend"] = trend_json(trend)
         if year is not None:
             data["year"] = year
         if cleanup is not None:
@@ -4417,13 +4797,29 @@ def _run_downloads_court(args) -> int:
             )
         print(json.dumps(data, indent=2))
     else:
-        if args.oneline:
+        if args.trend and trend is not None:
+            banner = [
+                "=" * 62,
+                "SNAP JUDGMENT - THE DOWNLOADS DOCKET",
+            ]
+            if voice != "fair":
+                banner.append(f"Presiding: {JUDGE_NAMES[voice]}")
+            banner += ["=" * 62, ""]
+            print("\n".join(banner))
+            print(render_trend_section(
+                trend, "files", folder_names, commentary=commentary,
+            ))
+        elif args.oneline:
             print(downloads_oneline(stats, tier))
         else:
             print(render_downloads_report(
                 stats, tier, sentence, awards, voice=voice,
                 commentary=commentary, year=year,
             ))
+            if versus is not None:
+                print(render_downloads_comparison(
+                    stats, tier, awards, versus
+                ))
             if args.rematch:
                 print(render_downloads_rematch_section(rematch, tier))
             if cleanup is not None:
@@ -4437,15 +4833,8 @@ def _run_downloads_court(args) -> int:
                 print(args.badge)
             for kit_path in kit_written:
                 print(kit_path)
-        append_history({
-            "timestamp": datetime.now().isoformat(timespec="seconds"),
-            "folders": folder_names,
-            "count": stats["count"],
-            "total_bytes": stats["total_bytes"],
-            "verdict": tier,
-            "judge": judge_label,
-            "court": "downloads",
-        })
+        if not history_recorded:
+            append_history(record)
     if fail_rank is not None and dl_tier_rank(tier) > fail_rank:
         return 1
     return 0
@@ -5193,6 +5582,7 @@ def main(argv=None) -> int:
             ("--csv", args.csv is not None),
             ("--badge", args.badge is not None),
             ("--html", args.html is not None),
+            ("--trend", bool(args.trend)),
         ]
         for flag, present in refused:
             if present:
@@ -5217,6 +5607,27 @@ def main(argv=None) -> int:
 
     explicit = explicitly_set(sys.argv[1:] if argv is None else argv)
     apply_config(args, explicit)
+
+    if args.trend:
+        # A trend is a report about one folder set's own history in
+        # one court; proceedings that compare, project, or combine
+        # do not combine with it.
+        refused = [
+            ("--vs", args.vs is not None),
+            ("--vs-year", args.vs_year is not None),
+            ("--rematch", bool(args.rematch)),
+            ("--grand-jury", bool(args.grand_jury)),
+            ("--plea-bargain", bool(args.plea_bargain)),
+            ("--wrapped-kit", args.wrapped_kit is not None),
+        ]
+        for flag, present in refused:
+            if present:
+                print(
+                    f"snapjudgment: {flag} is not supported "
+                    f"with --trend",
+                    file=sys.stderr,
+                )
+                return 2
 
     if args.grand_jury:
         return _run_grand_jury(args)
@@ -5509,6 +5920,25 @@ def main(argv=None) -> int:
             }
 
         history_records = read_history()
+        record = {
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "folders": folder_names,
+            "count": stats["count"],
+            "total_bytes": stats["total_bytes"],
+            "verdict": tier,
+            "judge": judge_label,
+        }
+        trend = None
+        history_recorded = False
+        if args.trend:
+            # The hearing is recorded FIRST, so the trend of the
+            # court record includes today; the trend is then read
+            # back from the record itself.
+            append_history(record)
+            history_recorded = True
+            trend = build_trend(
+                read_history(), folder_names, "screenshots", record
+            )
         court_line = None
         if not args.json and folder_names:
             court_line = court_record_line(
@@ -5545,7 +5975,7 @@ def main(argv=None) -> int:
                                 folders=folder_stats, vs_year=vs_year,
                                 plea=plea, rematch=rematch,
                                 rematch_requested=args.rematch,
-                                commentary=commentary),
+                                commentary=commentary, trend=trend),
                 encoding="utf-8"
             )
         if args.html:
@@ -5642,9 +6072,24 @@ def main(argv=None) -> int:
                     }
                     if rematch is not None else None
                 )
+            if trend is not None:
+                data["trend"] = trend_json(trend)
             print(json.dumps(data, indent=2))
         else:
-            if args.oneline:
+            if args.trend and trend is not None:
+                banner = [
+                    "=" * 62,
+                    "SNAP JUDGMENT - The Court of Screenshot Affairs",
+                ]
+                if voice != "fair":
+                    banner.append(f"Presiding: {JUDGE_NAMES[voice]}")
+                banner += ["=" * 62, ""]
+                print("\n".join(banner))
+                print(render_trend_section(
+                    trend, "screenshots", folder_names,
+                    commentary=commentary,
+                ))
+            elif args.oneline:
                 print(oneline_summary(stats, tier))
             else:
                 print(render_report(stats, tier, sentence, awards, year=year,
@@ -5670,14 +6115,8 @@ def main(argv=None) -> int:
                     print(args.badge)
                 for kit_path in kit_written:
                     print(kit_path)
-            append_history({
-                "timestamp": datetime.now().isoformat(timespec="seconds"),
-                "folders": folder_names,
-                "count": stats["count"],
-                "total_bytes": stats["total_bytes"],
-                "verdict": tier,
-                "judge": judge_label,
-            })
+            if not history_recorded:
+                append_history(record)
         if fail_rank is not None and tier_rank(tier) > fail_rank:
             return 1
         return 0

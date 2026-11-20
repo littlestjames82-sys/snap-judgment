@@ -34,6 +34,16 @@
               font-family: Georgia, 'Times New Roman', serif; font-size: 22px; font-weight: bold;
               letter-spacing: .04em; padding: 18px 42px; border-radius: 999px; }
   #judgeBtn:hover { background: var(--gold); }
+  #judgeBtn2 { background: var(--paper); color: var(--ink); border: 2px solid var(--ink); cursor: pointer;
+               font-family: Georgia, 'Times New Roman', serif; font-size: 19px; font-weight: bold;
+               letter-spacing: .04em; padding: 14px 34px; border-radius: 999px; margin-top: 12px; }
+  #judgeBtn2:hover { border-color: var(--gold); color: var(--gold); }
+  .gj-tier { font-size: 40px; font-weight: bold; color: var(--gold); margin: 10px 0 4px; line-height: 1.1; }
+  .gj-sentence { font-size: 18px; font-style: italic; margin: 8px 0 4px; }
+  .gj-commentary { font-size: 16.5px; font-style: italic; margin: 4px 0 2px; }
+  .gj-block h3 { font-size: 19px; margin: 16px 0 2px; }
+  #gjStanding { font-size: 19px; font-style: italic; margin: 12px 0 4px; }
+  canvas#gjCard { width: 100%; height: auto; border-radius: 8px; margin: 18px 0 4px; display: block; }
   #sampleBtn { background: var(--paper); color: var(--ink); border: 1.5px solid var(--ink); cursor: pointer;
                font-family: Georgia, 'Times New Roman', serif; font-size: 16px;
                padding: 11px 24px; border-radius: 999px; margin-top: 12px; }
@@ -108,10 +118,12 @@
 screenshots live and the court issues its verdict on the spot: a tier, the headline evidence, and a
 share card you can download. No install, no account, no waiting.</p>
 
-<div class="privacy"><b>HOW THE DEMO READS.</b> <span id="privacyShots">The demo reads file names, sizes, dates, and a few header bytes for dimensions. It never displays, uploads, or stores your pictures. Everything happens on this page, on your machine.</span><span id="privacyDl" hidden>The demo reads file names, sizes, and dates only. It never opens, displays, uploads, or stores your files. Everything happens on this page, on your machine.</span></div>
+<div class="privacy"><b>HOW THE DEMO READS.</b> <span id="privacyShots">The demo reads file names, sizes, dates, and a few header bytes for dimensions. It never displays, uploads, or stores your pictures. Everything happens on this page, on your machine.</span><span id="privacyDl" hidden>The demo reads file names, sizes, and dates only. It never opens, displays, uploads, or stores your files. Everything happens on this page, on your machine.</span><span id="privacyGj" hidden>The demo reads file names, sizes, dates, and, for screenshots only, a few header bytes for dimensions. The Downloads side is judged from names, sizes, and dates alone, and no file is ever opened. Nothing is displayed, uploaded, or stored. Everything happens on this page, on your machine.</span></div>
 
 <div class="judge-wrap">
   <button id="judgeBtn" type="button">Choose your screenshots folder</button>
+  <br>
+  <button id="judgeBtn2" type="button" hidden>2. Choose your Downloads folder</button>
   <br>
   <button id="sampleBtn" type="button">See a sample verdict</button>
   <p id="status" role="status"></p>
@@ -130,6 +142,7 @@ share card you can download. No install, no account, no waiting.</p>
   <span class="judge-label">Court</span>
   <button type="button" class="judge-btn court-btn active" data-court="screenshots">Screenshots</button>
   <button type="button" class="judge-btn court-btn" data-court="downloads">Downloads</button>
+  <button type="button" class="judge-btn court-btn" data-court="grandjury">Grand Jury</button>
 </div>
 <div class="judge-bar" role="group" aria-label="Presiding judge">
   <span class="judge-label">Presiding judge</span>
@@ -181,6 +194,34 @@ share card you can download. No install, no account, no waiting.</p>
   court record, and the wrapped kit: <code>pip install snap-judgment</code>, or judge another folder above.</p>
 </section>
 
+<section id="gjResult" hidden>
+  <p id="gjSampleBanner" class="sample-banner" hidden><b>SAMPLE DEFENDANTS.</b> Sample folders (synthetic) — judge your own folders for a real verdict.</p>
+  <p id="gjJudgeName">The Fair Judge presiding.</p>
+
+  <div id="gjShotsBlock" class="gj-block"></div>
+
+  <div id="gjDlBlock" class="gj-block"></div>
+
+  <p id="gjWaiting" class="sample-banner" hidden></p>
+
+  <div id="gjDocket" hidden>
+    <h2 class="verdict">The Full Docket</h2>
+    <table class="evidence">
+      <tbody id="gjDocketBody"></tbody>
+    </table>
+    <p id="gjStanding"></p>
+
+    <canvas id="gjCard" width="1200" height="630"></canvas>
+    <div class="actions">
+      <button id="gjDownloadCard" class="primary" type="button">Download the card (PNG)</button>
+      <button id="gjShareVerdict" type="button">Share the full docket</button>
+      <button id="gjCopyVerdict" type="button">Copy the full docket</button>
+      <a id="gjPostToX" class="btn" href="#" target="_blank" rel="noopener">Post to X</a>
+    </div>
+    <p class="sub">In the terminal the Grand Jury also writes a combined Markdown report, and each court keeps its own rematch afterward: <code>pip install snap-judgment</code>, or judge another folder above.</p>
+  </div>
+</section>
+
 <section id="noEvidence" hidden>
   <h2 class="verdict">The Verdict</h2>
   <div id="verdictTier2" style="font-size:46px;font-weight:bold;color:var(--gold);margin:14px 0 4px;">No Evidence</div>
@@ -193,7 +234,7 @@ share card you can download. No install, no account, no waiting.</p>
   </div>
 </section>
 
-<div class="notice"><b>METADATA ONLY.</b> <span id="noticeShots">Names, sizes, dates, and image header bytes for width and height. The demo never decodes a pixel, never runs OCR, and has nowhere to send anything even if it wanted to. What your screenshots show is your business; how many there are is the court's.</span><span id="noticeDl" hidden>Names, sizes, and dates only. The demo never opens a file, never runs OCR, and has nowhere to send anything even if it wanted to. What your files contain is your business; how many there are is the court's.</span></div>
+<div class="notice"><b>METADATA ONLY.</b> <span id="noticeShots">Names, sizes, dates, and image header bytes for width and height. The demo never decodes a pixel, never runs OCR, and has nowhere to send anything even if it wanted to. What your screenshots show is your business; how many there are is the court's.</span><span id="noticeDl" hidden>Names, sizes, and dates only. The demo never opens a file, never runs OCR, and has nowhere to send anything even if it wanted to. What your files contain is your business; how many there are is the court's.</span><span id="noticeGj" hidden>Names, sizes, dates, and, on the screenshots side only, image header bytes for width and height. The demo never decodes a pixel, never opens a downloads file, and has nowhere to send anything even if it wanted to. What your files show is your business; how many there are is the court's.</span></div>
 
 <footer>
   <span>Snap Judgment is built by <a href="https://ghostdeveloperstudio.com">Ghost Developer Studio</a>. MIT licensed.</span>

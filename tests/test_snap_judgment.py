@@ -3169,8 +3169,7 @@ class DownloadsCourtTests(TempDirCase):
 
     def test_unsupported_flags_error(self):
         self.seed(self.filler(3))
-        for flag, value in (("--vs", str(self.root)),
-                            ("--vs-year", "2025"),
+        for flag, value in (("--vs-year", "2025"),
                             ("--plea-bargain", None),
                             ("--judge-file", "pack.json")):
             argv = [str(self.root), "--court", "downloads", flag]
@@ -4869,6 +4868,428 @@ class DownloadsCleanupRecursiveTests(TempDirCase):
             stats["duplicate_extra_paths"],
             [str(sub / "setup (1).exe")],
         )
+
+
+# ---------------------------------------------------------------------------
+# the trend (v0.12.0): the court record for one folder set, visualized
+# ---------------------------------------------------------------------------
+
+class TrendTests(TempDirCase):
+    def setUp(self):
+        super().setUp()
+        self._old_cwd = os.getcwd()
+        self.shots_dir = self.root / "shots"
+        self.dl_dir = self.root / "downloads"
+        self.hist_file = self.root / "court" / "history.jsonl"
+        patcher = mock.patch.object(
+            sj, "history_path", return_value=self.hist_file
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def tearDown(self):
+        os.chdir(self._old_cwd)
+        super().tearDown()
+
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = sj.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def seed_shots(self, n, start=1):
+        for i in range(n):
+            write_file(
+                self.shots_dir, f"screenshot_{start + i}.png",
+                make_png(100, 100),
+                datetime(2026, 6, 1, 12, 0) + timedelta(days=start + i),
+            )
+
+    def seed_files(self, n, size=1000):
+        base = datetime(2026, 6, 1, 12, 0)
+        for i in range(n):
+            write_sized(self.dl_dir, f"file_{i:04d}.dat", size,
+                        base + timedelta(days=i % 28))
+
+    def seed_history(self, records):
+        self.hist_file.parent.mkdir(parents=True, exist_ok=True)
+        self.hist_file.write_text(
+            "".join(json.dumps(r) + "\n" for r in records),
+            encoding="utf-8",
+        )
+
+    def record(self, folder, count, verdict, when, court=None):
+        rec = {
+            "timestamp": when,
+            "folders": [str(folder)],
+            "count": count,
+            "total_bytes": count * 100,
+            "verdict": verdict,
+            "judge": "fair",
+        }
+        if court is not None:
+            rec["court"] = court
+        return rec
+
+    def sparkline_of(self, out):
+        blocks = set("▁▂▃▄▅▆▇█")
+        for line in out.splitlines():
+            text = line.strip()
+            if text and set(text) <= blocks:
+                return text
+        return None
+
+    # -- unit level ------------------------------------------------------
+
+    def test_sparkline_scaling(self):
+        self.assertEqual(sj.sparkline([]), "")
+        self.assertEqual(sj.sparkline([7]), "█")
+        self.assertEqual(sj.sparkline([3, 3]), "██")
+        self.assertEqual(sj.sparkline([10, 30, 60]), "▁▄█")
+        self.assertEqual(sj.sparkline([0, 10]), "▁█")
+
+    def test_build_trend_unit(self):
+        records = [
+            self.record(self.shots_dir, 0, "No Evidence",
+                        "2026-09-01T10:00:00"),
+            self.record(self.shots_dir, 8, "Innocent Bystander",
+                        "2026-10-01T10:00:00"),
+            # a different folder set: not this trend
+            self.record(self.root / "elsewhere", 500,
+                        "Habitual Hoarder", "2026-10-02T10:00:00"),
+        ]
+        trend = sj.build_trend(
+            records, [str(self.shots_dir)], "screenshots"
+        )
+        self.assertEqual(trend["hearings"], 2)
+        self.assertEqual(trend["counts"], [0, 8])
+        self.assertEqual(trend["delta"], 8)
+        # a first count of zero has no meaningful percent
+        self.assertEqual(trend["delta_pct"], 0.0)
+        self.assertEqual(
+            trend["tiers"], ["No Evidence", "Innocent Bystander"]
+        )
+
+    # -- screenshots court -------------------------------------------------
+
+    def test_trend_seeded_history(self):
+        self.seed_history([
+            self.record(self.shots_dir, 10, "Innocent Bystander",
+                        "2026-09-01T10:00:00"),
+            self.record(self.shots_dir, 30, "Innocent Bystander",
+                        "2026-10-01T10:00:00"),
+            # the downloads court's record for the same folder must
+            # not leak into the screenshots trend
+            self.record(self.shots_dir, 999, "Superfund Site",
+                        "2026-10-02T10:00:00", court="downloads"),
+        ])
+        self.seed_shots(60)
+        code, out, _ = self.run_main([str(self.shots_dir), "--trend"])
+        self.assertEqual(code, 0)
+        self.assertIn("TREND", out)
+        self.assertIn("Hearings on record: 3", out)
+        self.assertIn("Count: 10 -> 60 screenshots (+50, +500.0%)", out)
+        self.assertIn(
+            "Verdict: Innocent Bystander -> Petty Offender", out
+        )
+        spark = self.sparkline_of(out)
+        self.assertEqual(spark, "▁▄█")
+        self.assertEqual(len(spark), 3)  # one bar per hearing
+
+    def test_trend_first_hearing(self):
+        self.seed_shots(3)
+        code, out, _ = self.run_main([str(self.shots_dir), "--trend"])
+        self.assertEqual(code, 0)
+        self.assertIn("This is the first hearing on record.", out)
+        self.assertIn(
+            "Count: 3 screenshots, verdict Innocent Bystander.", out
+        )
+        self.assertEqual(self.sparkline_of(out), "█")
+        self.assertIn("(one hearing on record)", out)
+
+    def test_trend_includes_today_and_records_it(self):
+        self.seed_history([
+            self.record(self.shots_dir, 5, "Innocent Bystander",
+                        "2026-09-01T10:00:00"),
+        ])
+        self.seed_shots(3)
+        code, out, _ = self.run_main([str(self.shots_dir), "--trend"])
+        self.assertEqual(code, 0)
+        self.assertIn("Hearings on record: 2", out)
+        self.assertIn("Count: 5 -> 3 screenshots (-2, -40.0%)", out)
+        # today's hearing entered the record, so a second trend run
+        # sees three hearings
+        code, out, _ = self.run_main([str(self.shots_dir), "--trend"])
+        self.assertEqual(code, 0)
+        self.assertIn("Hearings on record: 3", out)
+        self.assertEqual(self.sparkline_of(out), "█▁▁")
+
+    def test_trend_json_shape(self):
+        self.seed_history([
+            self.record(self.shots_dir, 10, "Innocent Bystander",
+                        "2026-09-01T10:00:00"),
+            self.record(self.shots_dir, 30, "Innocent Bystander",
+                        "2026-10-01T10:00:00"),
+        ])
+        self.seed_shots(60)
+        code, out, _ = self.run_main(
+            [str(self.shots_dir), "--trend", "--json"]
+        )
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual(data["verdict"], "Petty Offender")
+        trend = data["trend"]
+        self.assertEqual(
+            set(trend),
+            {"hearings", "counts", "tiers", "first_count",
+             "latest_count", "delta", "delta_pct"},
+        )
+        self.assertEqual(trend["hearings"], 3)
+        self.assertEqual(trend["counts"], [10, 30, 60])
+        self.assertEqual(
+            trend["tiers"],
+            ["Innocent Bystander", "Innocent Bystander",
+             "Petty Offender"],
+        )
+        self.assertEqual(trend["first_count"], 10)
+        self.assertEqual(trend["latest_count"], 60)
+        self.assertEqual(trend["delta"], 50)
+        self.assertEqual(trend["delta_pct"], 500.0)
+
+    def test_trend_markdown_section(self):
+        self.seed_history([
+            self.record(self.shots_dir, 10, "Innocent Bystander",
+                        "2026-09-01T10:00:00"),
+            self.record(self.shots_dir, 30, "Innocent Bystander",
+                        "2026-10-01T10:00:00"),
+        ])
+        self.seed_shots(60)
+        md_path = self.root / "report.md"
+        code, _, _ = self.run_main(
+            [str(self.shots_dir), "--trend", "--out", str(md_path)]
+        )
+        self.assertEqual(code, 0)
+        md = md_path.read_text(encoding="utf-8")
+        self.assertIn("## Trend", md)
+        self.assertIn("Hearings on record: 3", md)
+        self.assertIn("```\n▁▄█\n```", md)
+
+    def test_trend_intensity_commentary(self):
+        base = datetime(2026, 6, 1, 23, 30)  # every shot at night
+        for i in range(60):
+            write_file(self.shots_dir, f"screenshot_{i}.png",
+                       make_png(100, 100), base + timedelta(days=i % 20))
+        code, out, _ = self.run_main(
+            [str(self.shots_dir), "--trend", "--intensity", "roast"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("COMMENTARY:", out)
+        self.assertIn("sleep schedule", out)
+
+    def test_trend_refusals(self):
+        self.seed_shots(3)
+        combos = [
+            ["--vs", str(self.root)],
+            ["--vs-year", "2025"],
+            ["--rematch"],
+            ["--plea-bargain"],
+            ["--wrapped-kit", str(self.root / "kit")],
+            ["--grand-jury"],
+        ]
+        for extra in combos:
+            with self.subTest(extra=extra):
+                code, _, err = self.run_main(
+                    [str(self.shots_dir), "--trend"] + extra
+                )
+                self.assertEqual(code, 2)
+                self.assertIn("not supported", err)
+                self.assertIn("--trend", err)
+
+    # -- downloads court ---------------------------------------------------
+
+    def test_trend_downloads_court_isolated(self):
+        self.seed_history([
+            # a screenshots-court record for the same folder (no
+            # court field) must not leak into the docket's trend
+            self.record(self.dl_dir, 999, "Habitual Hoarder",
+                        "2026-09-01T10:00:00"),
+            self.record(self.dl_dir, 4, "Tidy Desk",
+                        "2026-10-01T10:00:00", court="downloads"),
+        ])
+        self.seed_files(30)
+        code, out, _ = self.run_main(
+            [str(self.dl_dir), "--court", "downloads", "--trend"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("Hearings on record: 2", out)
+        self.assertIn("Count: 4 -> 30 files (+26, +650.0%)", out)
+        self.assertIn("Verdict: Tidy Desk -> Mild Clutter", out)
+        self.assertNotIn("999", out)
+
+
+# ---------------------------------------------------------------------------
+# co-defendants in the docket (v0.12.0): downloads --vs
+# ---------------------------------------------------------------------------
+
+class DownloadsVersusTests(TempDirCase):
+    def setUp(self):
+        super().setUp()
+        self._old_cwd = os.getcwd()
+        self.main_dir = self.root / "main"
+        self.vs_dir = self.root / "vs"
+
+    def tearDown(self):
+        os.chdir(self._old_cwd)
+        super().tearDown()
+
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = sj.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def seed(self, folder, n, size=1000,
+             start=datetime(2026, 6, 1, 12, 0)):
+        for i in range(n):
+            write_sized(folder, f"file_{i:04d}.dat", size,
+                        start + timedelta(days=i % 28))
+
+    def test_vs_terminal_comparison(self):
+        self.seed(self.main_dir, 30)   # Mild Clutter
+        self.seed(self.vs_dir, 5)      # Tidy Desk
+        code, out, _ = self.run_main(
+            [str(self.main_dir), "--court", "downloads",
+             "--vs", str(self.vs_dir)]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("CO-DEFENDANT COMPARISON", out)
+        self.assertIn("Mild Clutter", out)
+        self.assertIn("Tidy Desk", out)
+        self.assertIn(
+            "Delta (defendant less co-defendant): +25 files", out
+        )
+        self.assertIn("Bigger offender: the defendant", out)
+        self.assertIn("outranks", out)
+
+    def test_vs_co_defendant_worse(self):
+        self.seed(self.main_dir, 5)
+        self.seed(self.vs_dir, 30)
+        code, out, _ = self.run_main(
+            [str(self.main_dir), "--court", "downloads",
+             "--vs", str(self.vs_dir)]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("Bigger offender: the co-defendant", out)
+        self.assertIn(
+            "Delta (defendant less co-defendant): -25 files", out
+        )
+
+    def test_vs_tiebreak_count_when_tiers_level(self):
+        self.seed(self.main_dir, 30)   # Mild Clutter
+        self.seed(self.vs_dir, 40)     # also Mild Clutter, more files
+        code, out, _ = self.run_main(
+            [str(self.main_dir), "--court", "downloads",
+             "--vs", str(self.vs_dir)]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("Bigger offender: the co-defendant", out)
+        self.assertIn(
+            "on count with the verdicts level at Mild Clutter", out
+        )
+
+    def test_vs_tiebreak_size_when_counts_level(self):
+        self.seed(self.main_dir, 30, size=1000)
+        self.seed(self.vs_dir, 30, size=2000)
+        code, out, _ = self.run_main(
+            [str(self.main_dir), "--court", "downloads",
+             "--vs", str(self.vs_dir)]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("Bigger offender: the co-defendant", out)
+        self.assertIn("on total size with verdict and count level", out)
+
+    def test_vs_dead_heat(self):
+        self.seed(self.main_dir, 10)
+        self.seed(self.vs_dir, 10)
+        code, out, _ = self.run_main(
+            [str(self.main_dir), "--court", "downloads",
+             "--vs", str(self.vs_dir)]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("Dead heat", out)
+
+    def test_vs_json_shape(self):
+        self.seed(self.main_dir, 30)
+        self.seed(self.vs_dir, 5)
+        code, out, _ = self.run_main(
+            [str(self.main_dir), "--court", "downloads",
+             "--vs", str(self.vs_dir), "--json"]
+        )
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual(data["versus"]["worse_offender"], "main")
+        self.assertEqual(data["versus"]["main"]["count"], 30)
+        self.assertEqual(data["versus"]["vs"]["count"], 5)
+        self.assertEqual(
+            data["versus"]["main"]["court"], "downloads"
+        )
+        self.assertEqual(
+            data["versus"]["vs"]["verdict"], "Tidy Desk"
+        )
+
+    def test_vs_dead_heat_json(self):
+        self.seed(self.main_dir, 10)
+        self.seed(self.vs_dir, 10)
+        code, out, _ = self.run_main(
+            [str(self.main_dir), "--court", "downloads",
+             "--vs", str(self.vs_dir), "--json"]
+        )
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual(data["versus"]["worse_offender"], "tie")
+
+    def test_vs_markdown(self):
+        self.seed(self.main_dir, 30)
+        self.seed(self.vs_dir, 5)
+        md_path = self.root / "report.md"
+        code, _, _ = self.run_main(
+            [str(self.main_dir), "--court", "downloads",
+             "--vs", str(self.vs_dir), "--out", str(md_path)]
+        )
+        self.assertEqual(code, 0)
+        md = md_path.read_text(encoding="utf-8")
+        self.assertIn("## Co-Defendant Comparison", md)
+        self.assertIn("| Verdict | Mild Clutter | Tidy Desk |", md)
+        self.assertIn("Bigger offender: the defendant", md)
+
+    def test_vs_missing_folder(self):
+        self.seed(self.main_dir, 3)
+        code, _, err = self.run_main(
+            [str(self.main_dir), "--court", "downloads",
+             "--vs", str(self.root / "nope")]
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("folder not found", err)
+
+    def test_vs_empty_folder(self):
+        self.seed(self.main_dir, 3)
+        self.vs_dir.mkdir(parents=True)
+        code, _, err = self.run_main(
+            [str(self.main_dir), "--court", "downloads",
+             "--vs", str(self.vs_dir)]
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("co-defendant folder produced no files", err)
+
+    def test_vs_year_still_refused(self):
+        self.seed(self.main_dir, 3)
+        code, _, err = self.run_main(
+            [str(self.main_dir), "--court", "downloads",
+             "--vs-year", "2025"]
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("--vs-year", err)
+        self.assertIn("downloads court", err)
 
 
 # ---------------------------------------------------------------------------

@@ -11,10 +11,39 @@
 
 Meet [the defendants](gallery/README.md): five synthetic screenshot collections, from The Minimalist (35 screenshots, acquitted) to The Hoarder (2,800, Unrepentant Screenshot Felon), judged and entered into the record. New presiding voices live in [judges/](judges/README.md), and the version record is kept in the [changelog](CHANGELOG.md).
 
+> "Clever little bastard. Guilty of being fun."
+>
+> ChatGPT, reviewing the tool in November 2026, put Snap Judgment itself on trial in its own Court of Screenshot Affairs and delivered that verdict. The full review is entered into the record in the site's [Reviewed by a higher court](https://littlestjames82-sys.github.io/snap-judgment/) section.
+
+## Two courts and a grand jury
+
+The screenshots court is not the only chamber. `--court downloads` convenes
+the **Downloads Docket**, a second court that judges your Downloads folder
+from names, sizes, and dates only: installers and archives, duplicate
+download chains like `setup (2).exe`, the oldest file in the pile, and a
+verdict ladder of its own, from Tidy Desk to Superfund Site. A sample
+hearing is at [`examples/downloads-demo-output.txt`](examples/downloads-demo-output.txt),
+and the full docket is documented under [The downloads docket](#the-downloads-docket)
+below. `--grand-jury` then convenes both courts in one hearing and closes
+with a combined FULL DOCKET ruling: both verdicts, the combined evidence,
+and a standing line keyed to the pair. See [The grand jury](#the-grand-jury)
+below.
+
+New in v0.12.0:
+
+- `--trend`: your verdict trajectory from the court record, hearing over hearing.
+- Downloads co-defendants: `--court downloads --vs FOLDER` tries two downloads folders against each other.
+
 ## Install
 
 ```
 pip install snap-judgment
+```
+
+Or keep the tool in its own environment with [pipx](https://pipx.pypa.io/):
+
+```
+pipx install snap-judgment
 ```
 
 Pure Python standard library. No dependencies, Python 3.9+.
@@ -446,6 +475,37 @@ modification times, and - solely to learn an image's width and height - the
 header bytes of the image file. It never decodes image pixels, never runs
 OCR, and never uploads anything anywhere. What your screenshots show is your
 business; how many there are is the court's.
+
+## FAQ
+
+**Does it read my pictures?**
+No. The screenshots court reads file names, sizes, modification times, and
+the header bytes of each image, solely to learn its width and height. It
+never decodes a pixel and never runs OCR. The Downloads Docket does not
+open files at all: names, sizes, and dates only.
+
+**Does it delete anything?**
+Never. Snap Judgment only reports. The plea bargain computes what a
+cleanup would do, and the cleanup order writes the list of files that
+cleanup would remove, but the tool itself deletes, moves, and modifies
+nothing it judges. The court does not swing the axe itself.
+
+**Does anything leave my machine?**
+No. There are no uploads, no accounts, and no telemetry. Beyond the
+outputs you ask for, the only file it writes is the court record, a local
+history at `~/.snap-judgment/history.jsonl`.
+
+**Which platforms does it run on?**
+Windows, macOS, and Linux, on Python 3.9 or newer, with zero
+dependencies. The browser demo runs the same courts in your browser,
+on your machine only.
+
+**Can I use my own judge?**
+Yes. Three judges ship built in (strict, fair, lenient), and
+`--judge-file` seats a judge pack of your own: a small JSON file that
+can rename the court's awards and rewrite their evidence. The Poet,
+The Drill Sergeant, The Grandmother, and The Critic ship as examples
+in `judges/`.
 
 ## License
 

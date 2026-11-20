@@ -164,6 +164,7 @@ The browser demo hosts both courts; the toggle is at the top.</p>
   <li><b>A roast intensity bar</b> (<code>--intensity</code>): Gentle, Kind, Honest, Spicy, or Full Roast. It drives the court's commentary on your worst habit. The verdict math never moves.</li>
   <li><b>The charges</b>: a census of where your screenshots came from. Android filenames that carry an app are credited to it; everything else is classified by form factor.</li>
   <li><b>Co-defendant mode</b> (<code>--vs</code>) tries two folders against each other; <b>year over year</b> (<code>--vs-year</code>) tries this year against the last.</li>
+  <li><b>The Grand Jury</b> (<code>--grand-jury</code>) convenes both courts in one hearing: your screenshots and your Downloads tried together, closing with a combined Full Docket ruling, a standing line for the pair, and a combined share card. The browser demo hosts it too.</li>
   <li><b>The plea bargain</b> (<code>--plea-bargain</code>): the hypothetical verdict if you deleted your duplicate extras and everything older than two years, computed in full. The court runs the numbers; it never deletes a thing. <b>The cleanup order</b> (<code>--cleanup-list</code>) writes the exact list of files the plea would remove, for when you want to swing the axe yourself.</li>
   <li><b>Rematch mode</b> (<code>--rematch</code>) tries this hearing against the last one on record for the same folders: the count delta, and whether the verdict improved, worsened, or held.</li>
   <li><b>Date filters</b> (<code>--since</code>, <code>--until</code>) narrow a hearing to a date range, inclusive, and compose with <code>--year</code>. A bare year works too.</li>
@@ -171,6 +172,7 @@ The browser demo hosts both courts; the toggle is at the top.</p>
   <li><b>Share cards</b> as PNG, SVG, or HTML, a full HTML report, Markdown, JSON, CSV, and a one-line mode for scripts. The Markdown and HTML reports also draw an <b>hour-by-weekday heatmap</b> of the whole collection.</li>
   <li><b>A verdict badge</b> (<code>--badge</code>): a shields-style SVG of your tier, colored by severity, made for your README.</li>
   <li><b>The court record</b>: every hearing is remembered, and repeat hearings report whether the collection is up or down.</li>
+  <li><b>The trend</b> (<code>--trend</code>): your verdict trajectory from the court record, hearing over hearing, so a folder&#8217;s reform, or its relapse, is a matter of record.</li>
   <li><b>A GitHub Action</b> and <code>--fail-above</code>, so a verdict can fail a CI build.</li>
   <li>Defaults can live in a <b>config file</b>, and shell completions ship for the terminal.</li>
 </ul>
