@@ -2474,7 +2474,7 @@ class NewAward060Tests(TempDirCase):
             ("screenshot_now.png", make_png(10, 10),
              datetime(2026, 6, 1, 12, 0)),
             ("screenshot_future.png", make_png(10, 10),
-             datetime(2999, 1, 1, 12, 0)),
+             datetime(2100, 1, 1, 12, 0)),
         ]
         stats, _ = self.stats_for(files)
         self.assertIsNotNone(stats["future_shot"])
@@ -2485,7 +2485,7 @@ class NewAward060Tests(TempDirCase):
             if a["name"] == "Time Traveler"
         ][0]
         self.assertIn("screenshot_future.png", award["evidence"])
-        self.assertIn("Jan 1, 2999", award["evidence"])
+        self.assertIn("Jan 1, 2100", award["evidence"])
 
     def test_time_traveler_not_earned_without_future(self):
         files = [
