@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "snap-judgment"
+version = "0.1.0"
+description = "Snap Judgment issues a courtroom-style verdict on your screenshot habits, computed from file metadata only. It never decodes image pixels and never uploads anything."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Ryan Cotten", email = "hello@ghostdeveloperstudio.com" }]
+keywords = ["screenshots", "cli", "fun", "report-card", "metadata"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Utilities",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/littlestjames82-sys/snap-judgment"
+Repository = "https://github.com/littlestjames82-sys/snap-judgment"
+
+[project.scripts]
+snapjudgment = "snap_judgment:main"
+snap-judgment = "snap_judgment:main"
+
+[tool.setuptools]
+py-modules = ["snap_judgment"]
