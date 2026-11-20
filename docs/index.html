@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Snap Judgment: Your screenshots, reviewed</title>
+<meta name="description" content="Snap Judgment reads a folder of screenshots and issues a courtroom-style verdict on your screenshot habits, computed from file metadata only. It never decodes image pixels and never uploads anything. pip install snap-judgment">
+<meta property="og:title" content="Snap Judgment: a courtroom verdict on your screenshot habits">
+<meta property="og:description" content="Seven verdict tiers, the evidence, 14 awards, and a sentence. Local only, metadata only, no pixels read.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="assets/demo-card.png">
+<style>
+  :root { --paper:#fdfcf8; --ink:#1d1a16; --muted:#6f6a5e; --line:#d8d2c4; --gold:#8a6d1a; --accent:#b08d3c; --dark:#141210; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:#1a1712; color:var(--ink); font-family: Georgia, 'Times New Roman', serif; }
+  .sheet { max-width: 880px; margin: 0 auto; background: var(--paper); padding: 48px 40px 40px; box-shadow: 0 2px 24px rgba(0,0,0,.5); }
+  header.top { display:flex; justify-content:space-between; align-items:flex-start; border-bottom: 3px double var(--ink); padding-bottom: 14px; }
+  .form-no { font-size: 12px; letter-spacing: .18em; color: var(--muted); text-transform: uppercase; }
+  .stamp { border: 3px solid var(--gold); color: var(--gold); font-weight: bold; letter-spacing: .14em;
+           padding: 6px 12px; transform: rotate(4deg); font-size: 14px; text-transform: uppercase; border-radius: 4px; }
+  h1 { font-size: 44px; line-height: 1.08; margin: 30px 0 6px; }
+  h1 .snap { color: var(--gold); }
+  .tagline { font-size: 21px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 16.5px; line-height: 1.55; max-width: 640px; }
+  .install { background:var(--dark); color:#f2ead8; font-family: Menlo, Consolas, monospace; font-size: 16px;
+             padding: 14px 18px; border-radius: 6px; margin: 22px 0 8px; }
+  .install .alt { color:#9c9482; font-size: 13.5px; display:block; margin-top: 8px; }
+  .cta { display:flex; gap:10px; flex-wrap:wrap; margin: 14px 0 6px; }
+  .cta a { border: 1.5px solid var(--ink); color: var(--ink); text-decoration:none; padding: 9px 16px; border-radius: 999px; font-size: 15px; }
+  .cta a.primary { background: var(--ink); color: var(--paper); }
+  img.demo { width: 100%; border: 1px solid var(--line); border-radius: 8px; margin: 20px 0 4px; }
+  .caption { color: var(--muted); font-size: 13.5px; text-align:center; margin: 2px 0 10px; }
+  h2 { font-size: 25px; margin: 38px 0 6px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+  p, li { font-size: 16.5px; line-height: 1.6; }
+  table.tiers { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 16px; }
+  table.tiers th, table.tiers td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; }
+  table.tiers th { background: #f5f1e6; }
+  .awards { display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 16px 0; }
+  .award { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  .award b { display:block; font-size: 16px; margin-bottom: 4px; }
+  .award span { color: var(--muted); font-size: 14px; line-height: 1.45; display:block; }
+  pre.sample { background: var(--dark); color: #e8e3d8; font-family: Menlo, Consolas, monospace; font-size: 12.5px;
+               line-height: 1.5; padding: 18px; border-radius: 8px; overflow-x: auto; max-height: 480px; overflow-y: auto; }
+  .notice { border: 2px solid var(--gold); border-radius: 8px; padding: 12px 18px; margin: 26px 0; }
+  .notice b { color: var(--gold); letter-spacing: .06em; }
+  footer { border-top: 3px double var(--ink); margin-top: 40px; padding-top: 14px; color: var(--muted); font-size: 14.5px;
+           display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+  footer a { color: var(--ink); }
+  @media (max-width: 640px) { .sheet { padding: 30px 20px; } h1 { font-size: 32px; } }
+</style>
+</head>
+<body>
+<div class="sheet">
+
+<header class="top">
+  <div>
+    <div class="form-no">Case No. 2026-SNAP &middot; Court of Screenshot Affairs</div>
+    <div class="form-no">Defendant: Your Screenshots Folder</div>
+  </div>
+  <div class="stamp">Judged</div>
+</header>
+
+<h1>Your screenshots just got a <span class="snap">verdict</span>.</h1>
+<p class="tagline">Every phone keeps the receipts. <b>Snap Judgment reads them.</b></p>
+<p class="sub">Every screenshot you have ever taken is sitting in a folder, quietly becoming evidence.
+Snap Judgment reads that folder, locally, on your own machine, and issues a formal courtroom-style
+verdict on the habit: a tier, the evidence, awards, and a sentence. It works from file metadata
+only. It never looks at what your screenshots show.</p>
+
+<div class="install"><span>$ pip install snap-judgment</span><span class="alt">from source today: pip install git+https://github.com/littlestjames82-sys/snap-judgment &middot; Python 3.9+ &middot; zero dependencies</span></div>
+
+<div class="cta">
+  <a class="primary" href="https://github.com/littlestjames82-sys/snap-judgment">GitHub</a>
+  <a href="https://pypi.org/project/snap-judgment/">PyPI</a>
+  <a href="https://github.com/littlestjames82-sys/snap-judgment/tree/main/gallery">Meet the defendants</a>
+  <a href="https://github.com/littlestjames82-sys/snap-judgment/tree/main/judges">Judge packs</a>
+</div>
+
+<img class="demo" src="assets/demo-card.png" alt="Snap Judgment share card: Repeat Offender, 310 screenshots, 15.1 MB, night share 29.4%">
+<p class="caption">The 1200x630 share card, drawn by the tool itself with a hand-rolled bitmap font. No image library, no mockup.</p>
+
+<h2>The verdicts</h2>
+<table class="tiers">
+  <tr><th>Screenshots</th><th>Verdict</th></tr>
+  <tr><td>0</td><td>No Evidence</td></tr>
+  <tr><td>1-49</td><td>Innocent Bystander</td></tr>
+  <tr><td>50-199</td><td>Petty Offender</td></tr>
+  <tr><td>200-499</td><td>Repeat Offender</td></tr>
+  <tr><td>500-999</td><td>Habitual Hoarder</td></tr>
+  <tr><td>1,000-2,499</td><td>Felony-Level Archivist</td></tr>
+  <tr><td>2,500+</td><td>Unrepentant Screenshot Felon</td></tr>
+</table>
+<p>The court weighs the evidence first: total count and size, the largest single screenshot, date span,
+busiest day, month and hour, night share, weekend share, how much of the collection is over a year old,
+streaks, clean stretches, 60-second bursts, duplicate suspects and the storage they waste, formats,
+your screenshot season, your screenshot anniversary, and the device eras told by your screen resolutions.
+Your five oldest screenshots are entered as Exhibit A through Exhibit E.</p>
+
+<h2>The awards</h2>
+<div class="awards">
+  <div class="award"><b>Night Owl</b><span>A quarter or more of your screenshots happen between 10 PM and 5 AM.</span></div>
+  <div class="award"><b>The 3 AM Club</b><span>10 or more screenshots between 2 AM and 4 AM, when nothing on screen can be urgent.</span></div>
+  <div class="award"><b>Burst Mode</b><span>8 or more screenshots inside a single 60-second window.</span></div>
+  <div class="award"><b>The Archivist</b><span>Your oldest screenshot is at least 3 years old.</span></div>
+  <div class="award"><b>Receipt Keeper</b><span>Half or more of your shots are weekday 9-to-5 evidence.</span></div>
+  <div class="award"><b>Repeat Customer</b><span>10 or more files are exact duplicates of a sibling. The same screenshot, taken again.</span></div>
+  <div class="award"><b>Creature of Habit</b><span>A quarter or more of your screenshots fall in a single hour of the day.</span></div>
+  <div class="award"><b>Gigabyte Club</b><span>A gigabyte or more of evidence.</span></div>
+  <div class="award"><b>Time Traveler</b><span>The collection spans 4 or more years.</span></div>
+  <div class="award"><b>Lifer</b><span>The collection spans 8 or more years.</span></div>
+  <div class="award"><b>Anniversary</b><span>One month-day accounts for 15 or more screenshots across the years.</span></div>
+  <div class="award"><b>Screenshot Streak</b><span>7 or more consecutive days with at least one screenshot.</span></div>
+  <div class="award"><b>Clean Stretch</b><span>30 or more days without a single screenshot. A recorded moment of restraint.</span></div>
+  <div class="award"><b>Minimalist</b><span>Under 50 screenshots total. The court's rare acquittal.</span></div>
+</div>
+
+<h2>What is in the box</h2>
+<ul>
+  <li><b>Three presiding judges</b> (strict, fair, lenient) plus loadable <b>judge packs</b>: The Poet, The Drill Sergeant, The Grandmother. The voice changes the wording, never the math.</li>
+  <li><b>The charges</b>: a census of where your screenshots came from. Android filenames that carry an app are credited to it; everything else is classified by form factor.</li>
+  <li><b>Co-defendant mode</b> (<code>--vs</code>) tries two folders against each other; <b>year over year</b> (<code>--vs-year</code>) tries this year against the last.</li>
+  <li><b>A wrapped kit</b> for your year in screenshots: a share card and ready-to-post drafts built from your own numbers.</li>
+  <li><b>Share cards</b> as PNG, SVG, or HTML, a full HTML report, Markdown, JSON, CSV, and a one-line mode for scripts.</li>
+  <li><b>The court record</b>: every hearing is remembered, and repeat hearings report whether the collection is up or down.</li>
+  <li><b>A GitHub Action</b> and <code>--fail-above</code>, so a verdict can fail a CI build.</li>
+</ul>
+
+<h2>Meet the defendants</h2>
+<p>Five synthetic collections were generated from fixed seeds and judged, so you can read real reports
+before running your own: <b>The Minimalist</b> (35 screenshots, Innocent Bystander),
+<b>The Night Archivist</b> (900, Habitual Hoarder), <b>The Burst Photographer</b> (450, Repeat Offender),
+<b>The Hoarder</b> (2,800, Unrepentant Screenshot Felon), and <b>The Receipt Keeper</b> (220, Repeat Offender).
+Full reports and cards live in the <a href="https://github.com/littlestjames82-sys/snap-judgment/tree/main/gallery">gallery in the repo</a>.</p>
+
+<h2>A hearing, verbatim</h2>
+<pre class="sample">==============================================================
+SNAP JUDGMENT - The Court of Screenshot Affairs
+==============================================================
+
+THE VERDICT
+  Repeat Offender
+  310 screenshots, 15.1 MB of evidence,
+  spanning Jan 5, 2024 to Nov 10, 2026.
+
+THE EVIDENCE
+  Total screenshots              310
+  Total size                     15.1 MB (15,799,537 bytes)
+  Largest screenshot             Screenshot 2024-10-14 at 18.42.19.png (107.3 KB)
+  Date span                      Jan 5, 2024 - Nov 10, 2026 (1,041 days)
+  Oldest screenshot              Screenshot 2024-01-05 at 17.59.50.png (Jan 5, 2024)
+  Busiest day                    Aug 14, 2026 (13 screenshots)
+  Busiest month                  Aug 2026 (28 screenshots)
+  Busiest hour                   9 PM (27 screenshots)
+  Taken at night (10 PM-5 AM)    91 (29.4%)
+  Weekend share                  67 (21.6%)
+  Evidence retention             189 over a year old (61.0%)
+  Screenshots per day            0.3
+  Median per active day          1.0
+  Silent months                  0
+  Longest daily streak           10 days
+  Longest clean stretch          15 days (Jul 3, 2024 - Jul 17, 2024)
+  Biggest burst                  12 screenshots in 60 seconds
+  Duplicate suspects             1 group, 12 files
+  Duplicate waste                41.3 KB
+  Formats                        PNG 100%
+  Screenshot season              Summer (Jun-Aug) - 31.0%
+  Screenshot anniversary         Aug 14 - 14 screenshots across 2 years
+  Screen recordings              2
+  Device eras                    2
+                                 1170x2532 - 153 shots, Jan 5, 2024 to Aug 5, 2026
+                                 1920x1080 - 157 shots, Jul 3, 2025 to Nov 10, 2026
+  Screenshots per year           2024: 102, 2025: 103, 2026: 105
+
+THE CHARGES
+  Desktop / landscape            157 (50.6%)
+  Phone (tall)                   153 (49.4%)
+
+EXHIBITS
+  Exhibit A - Screenshot 2024-01-05 at 17.59.50.png (Jan 5, 2024)
+  Exhibit B - Screenshot 2024-01-12 at 11.46.18.png (Jan 12, 2024)
+  Exhibit C - Screenshot 2024-01-17 at 07.08.34.png (Jan 17, 2024)
+  Exhibit D - Screenshot 2024-01-21 at 22.29.11.png (Jan 21, 2024)
+  Exhibit E - Screenshot 2024-01-22 at 14.04.37.png (Jan 22, 2024)
+
+AWARDS
+  * Night Owl - 91 screenshots between 10 PM and 5 AM (29.4% of the total).
+  * The 3 AM Club - 32 screenshots taken between 2 AM and 4 AM, when nothing on screen can be urgent.
+  * Burst Mode - 12 screenshots inside a single 60-second window.
+  * Repeat Customer - 12 files share an exact size and dimensions with a sibling. The same screenshot, taken again.
+  * Screenshot Streak - 10 consecutive days with at least one screenshot.
+
+THE SENTENCE
+  Sentence: probation. The screenshots folder gets a check-in once a month.</pre>
+<p class="caption">From a synthetic demo folder of 310 screenshots. Your folder's testimony will differ.</p>
+
+<div class="notice"><b>METADATA ONLY.</b> Snap Judgment reads file names, sizes, modification times, and image header bytes (for width and height). It never decodes a pixel, never runs OCR, and never uploads anything. What your screenshots show is your business; how many there are is the court's.</div>
+
+<h2>Private by construction</h2>
+<p>No AI. No models. No uploads, accounts, or telemetry. Snap Judgment is one Python file of plain
+arithmetic in the standard library, so every finding can be traced back to the record that produced
+it. Even the share card's PNG is drawn pixel by pixel with a hand-rolled bitmap font, because a
+zero-dependency tool does not get to borrow an image library.</p>
+
+<footer>
+  <span>Snap Judgment is built by <a href="https://ghostdeveloperstudio.com">Ghost Developer Studio</a>. MIT licensed.</span>
+  <span><a href="https://github.com/littlestjames82-sys/snap-judgment">GitHub</a> &middot; <a href="https://pypi.org/project/snap-judgment/">PyPI</a></span>
+</footer>
+
+</div>
+</body>
+</html>

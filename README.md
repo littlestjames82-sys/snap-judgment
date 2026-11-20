@@ -1,6 +1,14 @@
 # Snap Judgment
 
+[![CI](https://github.com/littlestjames82-sys/snap-judgment/actions/workflows/ci.yml/badge.svg)](https://github.com/littlestjames82-sys/snap-judgment/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/github/license/littlestjames82-sys/snap-judgment)](LICENSE)
+
 **Your screenshots, reviewed.** Snap Judgment reads a folder of screenshots and issues a courtroom-style verdict on your screenshot habits: a tier, the evidence, awards, and a sentence.
+
+![Snap Judgment in action: a folder is judged, verdict delivered](examples/demo.gif)
+
+Meet [the defendants](gallery/README.md): five synthetic screenshot collections, from The Minimalist (35 screenshots, acquitted) to The Hoarder (2,800, Unrepentant Screenshot Felon), judged and entered into the record. New presiding voices live in [judges/](judges/README.md), and the version record is kept in the [changelog](CHANGELOG.md).
 
 ## Install
 
