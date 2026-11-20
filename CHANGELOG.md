@@ -4,6 +4,37 @@ All notable changes to Snap Judgment are recorded here. Versions are the
 tool's own; the record is the record. Every version below shipped on
 November 19, 2026 - it was that kind of day in court.
 
+## 0.9.0 - 2026-11-19
+
+- The Downloads Docket: `--court downloads` convenes a second court
+  for the downloads folder (the positional folder, or `~/Downloads`
+  when none is given). It judges every file on the surface, any type,
+  non-recursively, from names, sizes, and dates only: total files and
+  size, installers and archives, duplicate downloads (the `setup.exe`
+  / `setup (1).exe` chains), the oldest and largest files, an
+  extension census, and the share over a year old. Its verdict tiers
+  run from Tidy Desk to Superfund Site, and it keeps its own awards:
+  Installer Archaeologist, Zip Hoarder, Double Downloader, Ancient
+  Relic, Gigabyte Landfill, Still Seeding, Receipt Keeper DX, and
+  Time Capsule. Terminal, `--json` (now carrying a `court` field in
+  both courts), `--out`, `--oneline`, `--fail-above`, `--judge`,
+  `--intensity` (with downloads-specific commentary), and the court
+  record all work; the screenshots court's card, comparison, plea,
+  and date-filter options are refused with a plain error. `--court`
+  can also live in the config file.
+- Award packs: a judge pack may now carry an `awards` object that
+  renames awards by their stable keys, overriding the display name,
+  the evidence line (a template filled with the award's own stat
+  values), or both. Unknown keys are warned about and ignored. Every
+  award in JSON output now carries its stable `key`. A new pack,
+  `judges/judge-critic.json` (The Critic), demonstrates the feature.
+- The cleanup order: `--cleanup-list FILE` writes the exact files a
+  plea bargain would remove (duplicate extras plus screenshots older
+  than `--plea-years`), one path per line under a `#` header, and
+  reports the order in the terminal report and as a `cleanup_order`
+  object in JSON. The tool still deletes nothing; the court does not
+  swing the axe itself.
+
 ## 0.8.0 - 2026-11-19
 
 - `--intensity LEVEL`: the court adds a line of commentary after the

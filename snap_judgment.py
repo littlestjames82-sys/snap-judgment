@@ -45,7 +45,7 @@ try:
 except ModuleNotFoundError:  # Python 3.9 and 3.10 have no tomllib
     tomllib = None
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 # ---------------------------------------------------------------------------
 # detection
@@ -748,6 +748,23 @@ VOICE_SENTENCES = {
             "Sentence: the duplicates are deleted today. Not tomorrow. Today.",
         "Innocent Bystander":
             "Sentence: none. This time. The court will be watching the folder.",
+        # the downloads docket (v0.9.0)
+        "Superfund Site":
+            "Sentence: maximum. Every file will be reviewed, named, and "
+            "justified in writing. All of them.",
+        "Hoarding Situation":
+            "Sentence: a full audit of the downloads folder, this weekend. "
+            "No extensions. No excuses.",
+        "Landfill Adjacent":
+            "Sentence: the folder is seized. Nothing new enters it until "
+            "the backlog is halved.",
+        "Digital Junk Drawer":
+            "Sentence: weekly inspections of the downloads folder until "
+            "this court says otherwise.",
+        "Mild Clutter":
+            "Sentence: the installers are deleted today. Not tomorrow. Today.",
+        "Tidy Desk":
+            "Sentence: none. This time. The court will be watching the folder.",
     },
     "lenient": {
         "Unrepentant Screenshot Felon":
@@ -767,6 +784,25 @@ VOICE_SENTENCES = {
         "Innocent Bystander":
             "Encouragement: case dismissed, with applause. Screenshot this "
             "verdict; you have earned one.",
+        # the downloads docket (v0.9.0)
+        "Superfund Site":
+            "Encouragement: every archive tells a story, and yours is an "
+            "epic. There is no rush to change.",
+        "Hoarding Situation":
+            "Encouragement: you kept it all because it all mattered at the "
+            "time. That is not a crime in this court.",
+        "Landfill Adjacent":
+            "Encouragement: a healthy collection. Sort one folder someday, "
+            "if you ever feel like it.",
+        "Digital Junk Drawer":
+            "Encouragement: honestly, this is most people. A little tidy "
+            "now and then, if the mood strikes.",
+        "Mild Clutter":
+            "Encouragement: barely a habit at all. Keep doing what you "
+            "are doing.",
+        "Tidy Desk":
+            "Encouragement: case dismissed, with applause. Download "
+            "something nice; you have earned the space.",
     },
 }
 
@@ -785,15 +821,26 @@ AWARD_FRAMING = {
 
 CUSTOM_VOICE_KEY = "custom"
 
+# Award display overrides installed by judge packs, keyed by voice:
+# {voice: {award key: {"name": str, "evidence": str}}}. Populated by
+# register_judge_pack; consulted by compute_awards for that voice only.
+AWARD_OVERRIDES: dict = {}
+
 
 def load_judge_pack(path) -> dict:
     """Load and validate a custom judge pack (JSON). Raises SnapError
     with a plain message on any problem.
 
     Format: {"name": str, "intro": str (may use {tier} and {count}),
-    "sentences": {tier name: sentence}, "award_lead": str}. Every field
+    "sentences": {tier name: sentence}, "award_lead": str,
+    "awards": {award key: {"name": str, "evidence": str}}}. Every field
     except "name" is optional; tiers missing from "sentences" fall back
-    to the fair judge's sentence for that tier.
+    to the fair judge's sentence for that tier. The optional "awards"
+    object renames awards by their stable keys (see AWARD_KEYS): an
+    entry may override the display "name", the "evidence" line (a
+    format template filled with the award's own stat values), or both.
+    Entries keyed by an unknown award key are warned about on stderr
+    and ignored; they never break the run.
     """
     if not path.is_file():
         raise SnapError(f"judge file not found: {path}")
@@ -820,11 +867,34 @@ def load_judge_pack(path) -> dict:
     award_lead = data.get("award_lead", "")
     if not isinstance(award_lead, str):
         raise SnapError('judge file "award_lead" must be a string')
+    awards = data.get("awards", {})
+    if not isinstance(awards, dict):
+        raise SnapError('judge file "awards" must be an object')
+    clean_awards = {}
+    for award_key, entry in awards.items():
+        if award_key not in AWARD_KEYS:
+            print(
+                f"snapjudgment: warning: judge pack {path} renames an "
+                f"unknown award key: {award_key!r}; entry ignored",
+                file=sys.stderr,
+            )
+            continue
+        if not isinstance(entry, dict) or not entry or any(
+            field not in ("name", "evidence")
+            or not isinstance(value, str)
+            for field, value in entry.items()
+        ):
+            raise SnapError(
+                'judge file "awards" entries must be objects holding '
+                '"name" and/or "evidence" strings'
+            )
+        clean_awards[award_key] = dict(entry)
     return {
         "name": name,
         "intro": intro,
         "sentences": sentences,
         "award_lead": award_lead,
+        "awards": clean_awards,
     }
 
 
@@ -833,6 +903,7 @@ def register_judge_pack(pack: dict) -> str:
     key = CUSTOM_VOICE_KEY
     JUDGE_NAMES[key] = pack["name"]
     VOICE_SENTENCES[key] = dict(pack["sentences"])
+    AWARD_OVERRIDES[key] = dict(pack.get("awards") or {})
     if pack["intro"]:
         JUDGE_INTROS[key] = pack["intro"]
     else:
@@ -1017,108 +1088,181 @@ def court_commentary(stats: dict, level: int,
     return COMMENTARY_TEMPLATES[key][level].format(**values)
 
 
-def compute_awards(stats: dict, now: datetime | None = None) -> list[dict]:
+# Stable award keys for the screenshots court. Judge packs rename
+# awards by these keys (see load_judge_pack); the keys never change,
+# even when a display name does.
+AWARD_KEYS = {
+    "night_owl", "three_am_club", "burst_mode", "archivist",
+    "receipt_keeper", "repeat_customer", "creature_of_habit",
+    "gigabyte_club", "time_traveler", "long_haul", "lifer",
+    "ancient_relic", "anniversary", "screenshot_streak",
+    "clean_stretch", "minimalist",
+}
+
+
+def _award_record(key: str, name: str, evidence: str, **context) -> dict:
+    """One award under consideration: its stable key, its built-in
+    display name and evidence, and the stat values the evidence was
+    built from (the context a judge pack's evidence template is
+    formatted with)."""
+    return {"key": key, "name": name, "evidence": evidence,
+            "context": context}
+
+
+def compute_awards(stats: dict, now: datetime | None = None,
+                   voice: str = "fair") -> list[dict]:
+    """The awards a hearing earns: [{key, name, evidence}].
+
+    When the presiding voice is a judge pack carrying award overrides
+    (AWARD_OVERRIDES), an override may replace the display name, the
+    evidence (formatted with the award's own context values), or both.
+    An evidence template that does not fit the context falls back to
+    the built-in evidence. The math never changes: the same awards are
+    earned either way.
+    """
     now = now or datetime.now()
-    awards = []
+    records = []
     count = stats["count"]
     if stats["night_count"] >= 20 and stats["night_share"] >= 25:
-        awards.append({
-            "name": "Night Owl",
-            "evidence": f"{stats['night_count']} screenshots between 10 PM and 5 AM "
-                        f"({stats['night_share']:.1f}% of the total).",
-        })
+        records.append(_award_record(
+            "night_owl", "Night Owl",
+            f"{stats['night_count']} screenshots between 10 PM and 5 AM "
+            f"({stats['night_share']:.1f}% of the total).",
+            night_count=stats["night_count"],
+            night_share=stats["night_share"],
+        ))
     if stats["three_am_count"] >= 10:
-        awards.append({
-            "name": "The 3 AM Club",
-            "evidence": f"{stats['three_am_count']} screenshots taken between "
-                        f"2 AM and 4 AM, when nothing on screen can be urgent.",
-        })
+        records.append(_award_record(
+            "three_am_club", "The 3 AM Club",
+            f"{stats['three_am_count']} screenshots taken between "
+            f"2 AM and 4 AM, when nothing on screen can be urgent.",
+            three_am_count=stats["three_am_count"],
+        ))
     if stats["burst_record"] >= 8:
-        awards.append({
-            "name": "Burst Mode",
-            "evidence": f"{stats['burst_record']} screenshots inside a single 60-second window.",
-        })
+        records.append(_award_record(
+            "burst_mode", "Burst Mode",
+            f"{stats['burst_record']} screenshots inside a single 60-second window.",
+            burst_record=stats["burst_record"],
+        ))
     if (now - stats["oldest_dt"]).days >= 3 * 365:
-        awards.append({
-            "name": "The Archivist",
-            "evidence": f"The oldest screenshot dates to {_fmt_date(stats['oldest_date'])}, "
-                        f"over three years ago, and it is still here.",
-        })
+        records.append(_award_record(
+            "archivist", "The Archivist",
+            f"The oldest screenshot dates to {_fmt_date(stats['oldest_date'])}, "
+            f"over three years ago, and it is still here.",
+            oldest_name=stats["oldest_name"],
+            oldest_date=_fmt_date(stats["oldest_date"]),
+        ))
     if count >= 50 and stats["work_share"] >= 50:
-        awards.append({
-            "name": "Receipt Keeper",
-            "evidence": f"{stats['work_share']:.1f}% of shots were taken on weekdays between "
-                        f"9 AM and 5 PM. Very professional.",
-        })
+        records.append(_award_record(
+            "receipt_keeper", "Receipt Keeper",
+            f"{stats['work_share']:.1f}% of shots were taken on weekdays between "
+            f"9 AM and 5 PM. Very professional.",
+            work_share=stats["work_share"],
+        ))
     if stats["duplicate_files"] >= 10:
-        awards.append({
-            "name": "Repeat Customer",
-            "evidence": f"{stats['duplicate_files']} files share an exact size and dimensions "
-                        f"with a sibling. The same screenshot, taken again.",
-        })
+        records.append(_award_record(
+            "repeat_customer", "Repeat Customer",
+            f"{stats['duplicate_files']} files share an exact size and dimensions "
+            f"with a sibling. The same screenshot, taken again.",
+            duplicate_files=stats["duplicate_files"],
+        ))
     habit_share = (
         round(100.0 * stats["busiest_hour_count"] / count, 1) if count else 0.0
     )
     if habit_share >= 25:
-        awards.append({
-            "name": "Creature of Habit",
-            "evidence": f"{habit_share:.1f}% of all screenshots were taken in the "
-                        f"{_fmt_hour(stats['busiest_hour'])} hour. Same time, same impulse.",
-        })
+        records.append(_award_record(
+            "creature_of_habit", "Creature of Habit",
+            f"{habit_share:.1f}% of all screenshots were taken in the "
+            f"{_fmt_hour(stats['busiest_hour'])} hour. Same time, same impulse.",
+            habit_share=habit_share,
+            busiest_hour=_fmt_hour(stats["busiest_hour"]),
+        ))
     if stats["total_bytes"] >= 1024 ** 3:
-        awards.append({
-            "name": "Gigabyte Club",
-            "evidence": f"The screenshots alone total {stats['total_human']}. "
-                        f"The evidence locker needs a bigger room.",
-        })
+        records.append(_award_record(
+            "gigabyte_club", "Gigabyte Club",
+            f"The screenshots alone total {stats['total_human']}. "
+            f"The evidence locker needs a bigger room.",
+            total_human=stats["total_human"],
+            total_bytes=stats["total_bytes"],
+        ))
     if stats.get("future_shot") is not None:
         future = stats["future_shot"]
-        awards.append({
-            "name": "Time Traveler",
-            "evidence": f"{future['name']} is dated {_fmt_date(future['date'])}, "
-                        f"which has not happened yet. The court admits it anyway.",
-        })
+        records.append(_award_record(
+            "time_traveler", "Time Traveler",
+            f"{future['name']} is dated {_fmt_date(future['date'])}, "
+            f"which has not happened yet. The court admits it anyway.",
+            future_name=future["name"],
+            future_date=_fmt_date(future["date"]),
+        ))
     if stats["span_days"] >= 4 * 365:
-        awards.append({
-            "name": "The Long Haul",
-            "evidence": f"The collection spans {stats['span_days'] / 365.25:.1f} years of screenshots.",
-        })
+        records.append(_award_record(
+            "long_haul", "The Long Haul",
+            f"The collection spans {stats['span_days'] / 365.25:.1f} years of screenshots.",
+            span_years=round(stats["span_days"] / 365.25, 1),
+        ))
     if stats["span_days"] >= 8 * 365:
-        awards.append({
-            "name": "Lifer",
-            "evidence": f"The collection spans {stats['span_days'] / 365.25:.1f} years. "
-                        f"The screenshots have seniority now.",
-        })
+        records.append(_award_record(
+            "lifer", "Lifer",
+            f"The collection spans {stats['span_days'] / 365.25:.1f} years. "
+            f"The screenshots have seniority now.",
+            span_years=round(stats["span_days"] / 365.25, 1),
+        ))
     if stats["span_days"] >= 10 * 365:
-        awards.append({
-            "name": "Ancient Relic",
-            "evidence": f"{stats['oldest_name']} dates to "
-                        f"{_fmt_date(stats['oldest_date'])}, over ten years "
-                        f"before the newest screenshot in evidence.",
-        })
+        records.append(_award_record(
+            "ancient_relic", "Ancient Relic",
+            f"{stats['oldest_name']} dates to "
+            f"{_fmt_date(stats['oldest_date'])}, over ten years "
+            f"before the newest screenshot in evidence.",
+            oldest_name=stats["oldest_name"],
+            oldest_date=_fmt_date(stats["oldest_date"]),
+        ))
     if stats["anniversary"] is not None and stats["anniversary"]["count"] >= 15:
         anniv = stats["anniversary"]
-        awards.append({
-            "name": "Anniversary",
-            "evidence": f"{anniv['count']} screenshots fall on {anniv['month_day']}, "
-                        f"gathered across {anniv['years']} different years. "
-                        f"Some dates just attract evidence.",
-        })
+        records.append(_award_record(
+            "anniversary", "Anniversary",
+            f"{anniv['count']} screenshots fall on {anniv['month_day']}, "
+            f"gathered across {anniv['years']} different years. "
+            f"Some dates just attract evidence.",
+            anniversary_count=anniv["count"],
+            anniversary_day=anniv["month_day"],
+            anniversary_years=anniv["years"],
+        ))
     if stats["longest_streak"] >= 7:
-        awards.append({
-            "name": "Screenshot Streak",
-            "evidence": f"{stats['longest_streak']} consecutive days with at least one screenshot.",
-        })
+        records.append(_award_record(
+            "screenshot_streak", "Screenshot Streak",
+            f"{stats['longest_streak']} consecutive days with at least one screenshot.",
+            longest_streak=stats["longest_streak"],
+        ))
     if stats["longest_gap_days"] >= 30:
-        awards.append({
-            "name": "Clean Stretch",
-            "evidence": f"{stats['longest_gap_days']} days without a single screenshot. "
-                        f"The court's longest recorded moment of restraint.",
-        })
+        records.append(_award_record(
+            "clean_stretch", "Clean Stretch",
+            f"{stats['longest_gap_days']} days without a single screenshot. "
+            f"The court's longest recorded moment of restraint.",
+            longest_gap_days=stats["longest_gap_days"],
+        ))
     if 0 < count < 50:
+        records.append(_award_record(
+            "minimalist", "Minimalist",
+            f"Only {count} screenshots. The court rarely sees such restraint.",
+            count=count,
+        ))
+    overrides = AWARD_OVERRIDES.get(voice) or {}
+    awards = []
+    for record in records:
+        name, evidence = record["name"], record["evidence"]
+        override = overrides.get(record["key"])
+        if override:
+            if "name" in override:
+                name = override["name"]
+            if "evidence" in override:
+                try:
+                    evidence = override["evidence"].format(
+                        **record["context"]
+                    )
+                except (IndexError, KeyError, ValueError):
+                    pass  # a template that does not fit: built-in stands
         awards.append({
-            "name": "Minimalist",
-            "evidence": f"Only {count} screenshots. The court rarely sees such restraint.",
+            "key": record["key"], "name": name, "evidence": evidence,
         })
     return awards
 
@@ -1157,15 +1301,18 @@ def compute_plea_bargain(shots: list[Shot], plea_years: int,
     removed_old = 0
     removed_duplicates = 0
     removed_bytes = 0
+    removed_paths = []
     for s in shots:
         is_old = s.dt.date() < cutoff
         is_duplicate = id(s) in duplicate_extra_ids
         if is_old:
             removed_old += 1
             removed_bytes += s.size
+            removed_paths.append(s.path)
         elif is_duplicate:
             removed_duplicates += 1
             removed_bytes += s.size
+            removed_paths.append(s.path)
     removed_count = removed_old + removed_duplicates
     remaining = len(shots) - removed_count
     projected_tier, _sentence = verdict_for(remaining, voice=voice)
@@ -1177,6 +1324,7 @@ def compute_plea_bargain(shots: list[Shot], plea_years: int,
         "removed_count": removed_count,
         "removed_bytes": removed_bytes,
         "removed_human": human_bytes(removed_bytes),
+        "removed_paths": sorted(removed_paths),
         "remaining_count": remaining,
         "projected_tier": projected_tier,
     }
@@ -1208,6 +1356,551 @@ def render_plea_bargain(plea: dict, current_tier: str) -> str:
         "",
     ]
     return "\n".join(out)
+
+
+# ---------------------------------------------------------------------------
+# the downloads docket: a second court, for the downloads folder
+# ---------------------------------------------------------------------------
+
+DL_INSTALLER_EXTS = {".exe", ".msi", ".dmg", ".pkg", ".deb", ".rpm",
+                     ".appimage"}
+DL_ARCHIVE_EXTS = {".zip", ".tar", ".gz", ".tgz", ".7z", ".rar"}
+
+DL_TIERS = [
+    (1000, "Superfund Site",
+     "Sentence: the court recommends hazmat suits and a weekend. "
+     "Bring help."),
+    (500, "Hoarding Situation",
+     "Sentence: delete nothing. We both know you won't."),
+    (250, "Landfill Adjacent",
+     "Sentence: mandatory organization, suspended, because we both "
+     "know it won't happen."),
+    (100, "Digital Junk Drawer",
+     "Sentence: probation. The downloads folder gets a check-in "
+     "once a month."),
+    (25, "Mild Clutter",
+     "Sentence: community service. Delete one installer. Just one. "
+     "Baby steps."),
+    (1, "Tidy Desk",
+     "Sentence: case dismissed. Keep the desk exactly as it is."),
+]
+
+DL_TIER_ORDER = [
+    "Tidy Desk",
+    "Mild Clutter",
+    "Digital Junk Drawer",
+    "Landfill Adjacent",
+    "Hoarding Situation",
+    "Superfund Site",
+]
+
+DL_TIER_RANKS = {
+    _normalize_tier_name(tier): rank
+    for rank, tier in enumerate(DL_TIER_ORDER)
+}
+
+DL_FOOTER = (
+    "Judged from file names, sizes, and dates only. "
+    "No file was opened."
+)
+
+
+def dl_tier_rank(tier: str) -> int:
+    return DL_TIER_RANKS[_normalize_tier_name(tier)]
+
+
+def downloads_verdict_for(count: int, voice: str = "fair"):
+    """(tier name, sentence) for a downloads file count."""
+    if count <= 0:
+        return ("No Evidence", "")
+    for minimum, name, sentence in DL_TIERS:
+        if count >= minimum:
+            if voice in VOICE_SENTENCES:
+                sentence = VOICE_SENTENCES[voice].get(name, sentence)
+            return (name, sentence)
+    return ("Tidy Desk", DL_TIERS[-1][2])
+
+
+@dataclass
+class DlFile:
+    path: str
+    name: str
+    size: int
+    mtime: float
+    dt: datetime
+    ext: str
+
+
+def collect_downloads(folders, skipped=None) -> list:
+    """Every file directly inside the folders (never recursive).
+
+    The downloads court judges whatever is lying on the surface: any
+    type, no name hints, no header reads. A file that cannot be read
+    is skipped without crashing; when `skipped` is a one-element
+    list, the number of such files is added to skipped[0].
+    """
+    files: list[DlFile] = []
+    skipped_count = 0
+    for folder in folders:
+        try:
+            entries = list(Path(folder).iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                if not entry.is_file():
+                    continue
+                st = entry.stat()
+            except OSError:
+                skipped_count += 1
+                continue
+            files.append(DlFile(
+                path=str(entry),
+                name=entry.name,
+                size=st.st_size,
+                mtime=st.st_mtime,
+                dt=datetime.fromtimestamp(st.st_mtime),
+                ext=entry.suffix.lower(),
+            ))
+    files.sort(key=lambda f: f.mtime)
+    if skipped is not None:
+        skipped[0] += skipped_count
+    return files
+
+
+_DL_SUFFIX_RE = re.compile(r"\s*\(\d+\)\s*$|\s+copy(?:\s+\d+)?\s*$",
+                           re.IGNORECASE)
+
+
+def _dl_group_key(name: str):
+    """The identity of a download with its copy suffixes stripped:
+    'setup (2).exe', 'setup copy.exe' and 'setup.exe' share a key."""
+    stem = Path(name).stem
+    while True:
+        stripped = _DL_SUFFIX_RE.sub("", stem)
+        if stripped == stem:
+            break
+        stem = stripped
+    return (stem.strip().lower(), Path(name).suffix.lower())
+
+
+def analyze_downloads(files: list, now: datetime | None = None) -> dict:
+    """Every statistic for a downloads hearing (metadata only)."""
+    now = now or datetime.now()
+    count = len(files)
+    total_bytes = sum(f.size for f in files)
+
+    installers = [f for f in files if f.ext in DL_INSTALLER_EXTS]
+    archives = [f for f in files if f.ext in DL_ARCHIVE_EXTS]
+
+    groups: dict = defaultdict(list)
+    for f in files:
+        groups[_dl_group_key(f.name)].append(f)
+    duplicate_groups = 0
+    duplicate_extra = 0
+    duplicate_extra_bytes = 0
+    for key, members in groups.items():
+        if len(members) < 2:
+            continue
+        duplicate_groups += 1
+        keeper = min(
+            members,
+            key=lambda f: (
+                0 if Path(f.name).stem.lower() == key[0] else 1,
+                f.name.lower(),
+            ),
+        )
+        for member in members:
+            if member is not keeper:
+                duplicate_extra += 1
+                duplicate_extra_bytes += member.size
+
+    oldest = min(files, key=lambda f: (f.mtime, f.name))
+    largest = max(files, key=lambda f: (f.size, f.name))
+    oldest_age_years = max(0, (now - oldest.dt).days // 365)
+
+    ext_counts = Counter(f.ext or "(no extension)" for f in files)
+    extensions = [
+        {"ext": ext, "count": n}
+        for ext, n in sorted(
+            ext_counts.items(), key=lambda kv: (-kv[1], kv[0])
+        )[:8]
+    ]
+
+    old_count = sum(1 for f in files if (now - f.dt).days > 365)
+    old_share = round(100.0 * old_count / count, 1) if count else 0.0
+
+    first_date = files[0].dt.date()
+    last_date = files[-1].dt.date()
+    return {
+        "count": count,
+        "total_bytes": total_bytes,
+        "total_human": human_bytes(total_bytes),
+        "first_date": first_date,
+        "last_date": last_date,
+        "span_days": (last_date - first_date).days,
+        "installer_count": len(installers),
+        "installer_bytes": sum(f.size for f in installers),
+        "installer_human": human_bytes(sum(f.size for f in installers)),
+        "archive_count": len(archives),
+        "archive_bytes": sum(f.size for f in archives),
+        "duplicate_groups": duplicate_groups,
+        "duplicate_extra": duplicate_extra,
+        "duplicate_extra_bytes": duplicate_extra_bytes,
+        "oldest_name": oldest.name,
+        "oldest_date": oldest.dt.date(),
+        "oldest_dt": oldest.dt,
+        "oldest_age_years": oldest_age_years,
+        "largest_name": largest.name,
+        "largest_size": largest.size,
+        "largest_human": human_bytes(largest.size),
+        "extensions": extensions,
+        "old_count": old_count,
+        "old_share": old_share,
+        "torrent_count": sum(1 for f in files if f.ext == ".torrent"),
+        "receipt_count": sum(
+            1 for f in files
+            if "invoice" in f.name.lower() or "receipt" in f.name.lower()
+        ),
+        "skipped": 0,
+    }
+
+
+def compute_downloads_awards(stats: dict) -> list[dict]:
+    """The downloads court's own awards: [{key, name, evidence}]."""
+    awards = []
+    if stats["installer_count"] >= 10:
+        awards.append({
+            "key": "installer_archaeologist",
+            "name": "Installer Archaeologist",
+            "evidence": f"{stats['installer_count']} installers "
+                        f"({stats['installer_human']}) kept after their "
+                        f"work was done. The court has excavated older "
+                        f"civilizations with fewer setup files.",
+        })
+    if stats["archive_count"] >= 15:
+        awards.append({
+            "key": "zip_hoarder",
+            "name": "Zip Hoarder",
+            "evidence": f"{stats['archive_count']} archives on disk, "
+                        f"still zipped. Whatever is inside them, it is "
+                        f"staying inside them.",
+        })
+    if stats["duplicate_extra"] >= 5:
+        awards.append({
+            "key": "double_downloader",
+            "name": "Double Downloader",
+            "evidence": f"{stats['duplicate_extra']} extra copies of "
+                        f"files the defendant already had, in "
+                        f"{stats['duplicate_groups']} duplicate sets. "
+                        f"Downloaded twice, trusted once.",
+        })
+    if stats["oldest_age_years"] >= 3:
+        awards.append({
+            "key": "ancient_relic",
+            "name": "Ancient Relic",
+            "evidence": f"{stats['oldest_name']} dates to "
+                        f"{_fmt_date(stats['oldest_date'])}, over three "
+                        f"years ago, and it is still here.",
+        })
+    if stats["total_bytes"] >= 5 * 1024 ** 3:
+        awards.append({
+            "key": "gigabyte_landfill",
+            "name": "Gigabyte Landfill",
+            "evidence": f"The downloads alone total "
+                        f"{stats['total_human']}. The landfill has its "
+                        f"own weather now.",
+        })
+    if stats["torrent_count"] >= 1:
+        n = stats["torrent_count"]
+        awards.append({
+            "key": "still_seeding",
+            "name": "Still Seeding",
+            "evidence": f"{n} torrent file{'s' if n != 1 else ''} on "
+                        f"disk. The court does not ask what they point "
+                        f"to. It never asks.",
+        })
+    if stats["receipt_count"] >= 1:
+        n = stats["receipt_count"]
+        awards.append({
+            "key": "receipt_keeper_dx",
+            "name": "Receipt Keeper DX",
+            "evidence": f"{n} file{'s' if n != 1 else ''} with invoice "
+                        f"or receipt in the name. The tax folder sends "
+                        f"its regards.",
+        })
+    if stats["count"] and stats["old_share"] >= 60:
+        awards.append({
+            "key": "time_capsule",
+            "name": "Time Capsule",
+            "evidence": f"{stats['old_share']:.1f}% of these files are "
+                        f"over a year old. This is less a folder than "
+                        f"a stratum.",
+        })
+    return awards
+
+
+# One template per band (gentle, kind, honest, spicy, roast) for each
+# case the downloads court can comment on. Tokens: {dup} duplicate
+# extras, {installers} installer count, {age} oldest file's age in
+# years, {size} total size (human), {count} total files. Priority:
+# duplicate extras of 5 or more, then 10 or more installers, then an
+# oldest file 3 years old or more, then 5 GB or more, then the count.
+DL_COMMENTARY_TEMPLATES = {
+    "dup": [
+        "The court found {dup} files that were downloaded more than once, and chooses to believe the defendant simply wanted to be very sure.",
+        "{dup} duplicate downloads. The defendant downloads the way nervous travelers check for their passport, repeatedly and just in case.",
+        "{dup} of these files are the same download, fetched again. The internet remembers, even when the defendant does not.",
+        "{dup} duplicate downloads. The defendant's working theory appears to be that a file does not exist until it has been downloaded twice.",
+        "{dup} duplicate downloads. The court has now reviewed the same installer multiple times, and it was not that compelling the first time.",
+    ],
+    "installers": [
+        "The court counts {installers} installers and sees a well-equipped machine. Every one of them set something up once.",
+        "{installers} installers kept on disk. The defendant holds onto the boxes the software came in, just in case.",
+        "{installers} installers. The software is already installed. The installers remain, as a tribute.",
+        "{installers} installers, kept long after the software moved in. The court notes the defendant could open a small museum of setup wizards.",
+        "{installers} installers. The defendant has kept every key to every door ever opened on this machine, including the doors that were demolished.",
+    ],
+    "old": [
+        "The oldest file here is {age} years old, and the court finds something sweet in that. Some things are simply worth keeping.",
+        "A file from {age} years ago still lives in this folder. The court respects a long memory, even a digital one.",
+        "The oldest evidence is {age} years old. The court asks, for the record, if the defendant remembers downloading it, or why.",
+        "{age} years old, the senior file in this folder has survived new machines, new updates, and several opportunities to delete it.",
+        "The court presents a file {age} years old. It has been carried from machine to machine like a family heirloom, except an heirloom is occasionally looked at.",
+    ],
+    "size": [
+        "The court weighs the evidence at {size} and sees a thorough collector at work. Every byte meant something once.",
+        "{size} of downloads. The court admires the commitment, even if the filing system is more of a pile.",
+        "{size}. The court notes the defendant has never once paused to think, perhaps I already have this one.",
+        "{size} of downloads. Somewhere around the halfway mark this stopped being a folder and became a storage unit.",
+        "{size}. The court would ask the defendant to produce one specific file, but nobody involved has that kind of time. That is rather the point.",
+    ],
+    "plain": [
+        "The court has reviewed {count} files and finds a perfectly ordinary folder. The defendant is free to go.",
+        "{count} files, and nothing the court has not seen a hundred times. A respectable, unremarkable collection.",
+        "{count} files. Not a crime scene, not a model of restraint. The court records a shrug and moves on.",
+        "{count} files, and the most notable thing about them is that there are {count} of them. The court expected either far more drama or far less folder.",
+        "{count} files. The court searched this folder for a scandal and found only volume. Even the commentary is disappointed.",
+    ],
+}
+
+
+def downloads_commentary(stats: dict, level: int) -> str:
+    """The downloads court's commentary: one line, flavored by the
+    roast intensity band, aimed at the folder's most damning stat."""
+    if not stats or not stats.get("count"):
+        return NO_COMMENTARY
+    level = max(0, min(4, int(level)))
+    values = {
+        "dup": stats["duplicate_extra"],
+        "installers": stats["installer_count"],
+        "age": stats["oldest_age_years"],
+        "size": stats["total_human"],
+        "count": f"{stats['count']:,}",
+    }
+    if stats["duplicate_extra"] >= 5:
+        key = "dup"
+    elif stats["installer_count"] >= 10:
+        key = "installers"
+    elif stats["oldest_age_years"] >= 3:
+        key = "old"
+    elif stats["total_bytes"] >= 5 * 1024 ** 3:
+        key = "size"
+    else:
+        key = "plain"
+    return DL_COMMENTARY_TEMPLATES[key][level].format(**values)
+
+
+def _dl_evidence_lines(stats: dict) -> list[tuple[str, str]]:
+    lines = [
+        ("Total files", f"{stats['count']:,}"),
+        ("Total size", f"{stats['total_human']} ({stats['total_bytes']:,} bytes)"),
+        ("Largest file", f"{stats['largest_name']} ({stats['largest_human']})"),
+        ("Date span", f"{_fmt_date(stats['first_date'])} - {_fmt_date(stats['last_date'])} "
+                      f"({stats['span_days'] + 1:,} day{'s' if stats['span_days'] else ''})"),
+        ("Oldest file", f"{stats['oldest_name']} ({_fmt_date(stats['oldest_date'])})"),
+        ("Installers", f"{stats['installer_count']} ({stats['installer_human']})"),
+        ("Archives", f"{stats['archive_count']}"),
+        ("Duplicate downloads", f"{stats['duplicate_groups']} "
+                                f"group{'s' if stats['duplicate_groups'] != 1 else ''}, "
+                                f"{stats['duplicate_extra']} extra copies"),
+    ]
+    if stats["duplicate_extra_bytes"] > 0:
+        lines.append(
+            ("Duplicate waste", human_bytes(stats["duplicate_extra_bytes"]))
+        )
+    lines.append(
+        ("Over a year old", f"{stats['old_count']} "
+                            f"({stats['old_share']:.1f}%)")
+    )
+    if stats["extensions"]:
+        lines.append(
+            ("Top file types", ", ".join(
+                f"{entry['ext']} {entry['count']}"
+                for entry in stats["extensions"][:5]
+            ))
+        )
+    if stats.get("skipped"):
+        lines.append(("Files the court could not read", f"{stats['skipped']}"))
+    return lines
+
+
+def render_downloads_no_evidence() -> str:
+    return "\n".join([
+        "=" * 62,
+        "SNAP JUDGMENT - THE DOWNLOADS DOCKET",
+        "=" * 62,
+        "",
+        "THE VERDICT",
+        "  No Evidence",
+        "",
+        "  The court finds nothing. No files were produced as",
+        "  evidence, which means this folder is innocent, empty, or",
+        "  not where your downloads actually live.",
+        "",
+        DL_FOOTER,
+        "",
+    ])
+
+
+def render_downloads_report(stats: dict, tier: str, sentence: str,
+                            awards: list[dict], voice: str = "fair",
+                            commentary: str | None = None) -> str:
+    out = [
+        "=" * 62,
+        "SNAP JUDGMENT - THE DOWNLOADS DOCKET",
+    ]
+    if voice != "fair":
+        out.append(f"Presiding: {JUDGE_NAMES[voice]}")
+    out += [
+        "=" * 62,
+        "",
+        "THE VERDICT",
+    ]
+    intro = JUDGE_INTROS.get(voice)
+    if intro:
+        out.append(f"  {_format_intro(intro, tier, stats['count'])}")
+    out += [
+        f"  {tier}",
+        f"  {stats['count']:,} files, {stats['total_human']} of evidence,",
+        f"  spanning {_fmt_date(stats['first_date'])} to {_fmt_date(stats['last_date'])}.",
+        "",
+        "THE EVIDENCE",
+    ]
+    for label, value in _dl_evidence_lines(stats):
+        out.append(f"  {label:<30} {value}")
+    out += ["", "AWARDS"]
+    framing = AWARD_FRAMING.get(voice)
+    if awards:
+        if framing:
+            out.append(f"  {framing[0]}")
+        for award in awards:
+            out.append(f"  * {award['name']} - {award['evidence']}")
+    else:
+        out.append(
+            f"  {framing[1] if framing else 'None. The court is as surprised as you are.'}"
+        )
+    out += ["", "THE SENTENCE", f"  {sentence}"]
+    if commentary is not None:
+        out.append(f"  COMMENTARY: {commentary}")
+    out += ["", DL_FOOTER, ""]
+    return "\n".join(out)
+
+
+def render_downloads_markdown(stats: dict, tier: str, sentence: str,
+                              awards: list[dict], voice: str = "fair",
+                              commentary: str | None = None) -> str:
+    out = [
+        "# Snap Judgment - The Downloads Docket",
+        "",
+        "## The Verdict",
+        "",
+        f"**{tier}** - {stats['count']:,} files, {stats['total_human']} of evidence, "
+        f"spanning {_fmt_date(stats['first_date'])} to {_fmt_date(stats['last_date'])}.",
+    ]
+    intro = JUDGE_INTROS.get(voice)
+    if intro:
+        out.append(_format_intro(intro, tier, stats["count"]))
+    out += ["", "## The Evidence", ""]
+    for label, value in _dl_evidence_lines(stats):
+        out.append(f"- **{label}:** {value}")
+    out += ["", "## Awards", ""]
+    framing = AWARD_FRAMING.get(voice)
+    if awards:
+        if framing:
+            out.append(framing[0])
+        for award in awards:
+            out.append(f"- **{award['name']}** - {award['evidence']}")
+    else:
+        out.append(
+            framing[1] if framing else "None. The court is as surprised as you are."
+        )
+    out += ["", "## The Sentence", "", sentence, ""]
+    if commentary is not None:
+        out += ["## Court Commentary", "", commentary, ""]
+    out += [DL_FOOTER, ""]
+    return "\n".join(out)
+
+
+def build_downloads_json(stats: dict, tier: str, sentence: str,
+                         awards: list[dict], folders: list[dict],
+                         judge: str = "fair",
+                         commentary: str | None = None) -> dict:
+    data = {
+        "version": __version__,
+        "court": "downloads",
+        "folders": folders,
+        "verdict": tier,
+        "sentence": sentence,
+        "judge": judge,
+        "count": stats["count"],
+        "total_bytes": stats["total_bytes"],
+        "total_human": stats["total_human"],
+        "first_date": stats["first_date"].isoformat(),
+        "last_date": stats["last_date"].isoformat(),
+        "span_days": stats["span_days"],
+        "oldest": {
+            "name": stats["oldest_name"],
+            "date": stats["oldest_date"].isoformat(),
+            "age_years": stats["oldest_age_years"],
+        },
+        "largest": {
+            "name": stats["largest_name"],
+            "bytes": stats["largest_size"],
+            "human": stats["largest_human"],
+        },
+        "installers": {
+            "count": stats["installer_count"],
+            "bytes": stats["installer_bytes"],
+            "human": stats["installer_human"],
+        },
+        "archives": {
+            "count": stats["archive_count"],
+            "bytes": stats["archive_bytes"],
+        },
+        "duplicate_groups": stats["duplicate_groups"],
+        "duplicate_extra": stats["duplicate_extra"],
+        "duplicate_extra_bytes": stats["duplicate_extra_bytes"],
+        "extensions": stats["extensions"],
+        "old_count": stats["old_count"],
+        "old_share": stats["old_share"],
+        "torrent_count": stats["torrent_count"],
+        "receipt_count": stats["receipt_count"],
+        "skipped": stats.get("skipped", 0),
+        "awards": awards,
+    }
+    if commentary is not None:
+        data["commentary"] = commentary
+    return data
+
+
+def downloads_oneline(stats: dict, tier: str) -> str:
+    """Exactly one line: verdict, file count, size, span."""
+    span = f"{stats['first_date']:%b %Y} - {stats['last_date']:%b %Y}"
+    return (
+        f"{tier} · {stats['count']:,} files · "
+        f"{stats['total_human']} · {span}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1499,7 +2192,7 @@ def build_vs_year(shots: list[Shot], recordings: list[Shot],
             "stats": year_stats,
             "tier": year_tier,
             "sentence": year_sentence,
-            "awards": compute_awards(year_stats),
+            "awards": compute_awards(year_stats, voice=voice),
         }
 
     target = scope(target_year)
@@ -1750,6 +2443,7 @@ def build_json(stats: dict, tier: str, sentence: str, awards: list[dict],
                commentary: str | None = None) -> dict:
     data = {
         "version": __version__,
+        "court": "screenshots",
         "folders": folders,
         "verdict": tier,
         "sentence": sentence,
@@ -2528,9 +3222,13 @@ def render_history(records: list[dict]) -> str:
         try:
             when = datetime.fromisoformat(record["timestamp"])
             folder = (record.get("folders") or ["?"])[0]
+            unit = (
+                "files" if record.get("court") == "downloads"
+                else "screenshots"
+            )
             out.append(
                 f"  {_fmt_date(when.date())}  {folder}  "
-                f"{record['count']} screenshots  {record['verdict']}"
+                f"{record['count']} {unit}  {record['verdict']}"
             )
         except Exception:
             continue
@@ -2732,6 +3430,10 @@ def load_config(folder_args, validate_judge_file=True):
     if judge is not None and judge not in VOICES:
         _config_warning(path, f"unknown judge: {judge!r}")
         return {}
+    court = data.get("court")
+    if court is not None and court not in ("screenshots", "downloads"):
+        _config_warning(path, f"unknown court: {court!r}")
+        return {}
     intensity = data.get("intensity")
     if intensity is not None:
         try:
@@ -2777,13 +3479,15 @@ def apply_config(args, explicit):
 
     Command-line flags always win; the config only supplies values for
     options that were not typed. Supported keys: folders, judge,
-    judge_file, plea_years, fail_above, all, intensity.
+    judge_file, plea_years, fail_above, all, intensity, court.
     """
     data = load_config(
         args.folders, validate_judge_file="judge_file" not in explicit
     )
     if not data:
         return
+    if "court" not in explicit and isinstance(data.get("court"), str):
+        args.court = data["court"]
     folders = data.get("folders")
     if not args.folders and isinstance(folders, list) and all(
         isinstance(item, str) for item in folders
@@ -2823,6 +3527,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("folders", nargs="*", metavar="FOLDER",
                         help="folder(s) of screenshots (default: auto-detect)")
+    parser.add_argument("--court", choices=["screenshots", "downloads"],
+                        default="screenshots",
+                        help="which court sits: the screenshots court "
+                             "(default) or the downloads docket, which "
+                             "judges a downloads folder (default folder: "
+                             "~/Downloads) from names, sizes, and dates")
     parser.add_argument("--all", action="store_true",
                         help="treat every image in the folders as a screenshot")
     parser.add_argument("--json", action="store_true",
@@ -2854,6 +3564,13 @@ def build_parser() -> argparse.ArgumentParser:
                         type=int, default=2,
                         help="with --plea-bargain: screenshots older than "
                              "this many years would go (default: 2)")
+    parser.add_argument("--cleanup-list", metavar="FILE",
+                        dest="cleanup_list",
+                        help="write the cleanup order to FILE: the exact "
+                             "list of files a plea bargain would remove "
+                             "(duplicate extras and screenshots older than "
+                             "--plea-years years), one path per line. "
+                             "Nothing is ever deleted.")
     parser.add_argument("--rematch", action="store_true",
                         help="compare this hearing against the last court "
                              "record for the same folders")
@@ -2891,6 +3608,181 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _run_downloads_court(args) -> int:
+    """One hearing of the downloads docket. Returns the exit code.
+
+    The docket judges every file in the folder (~/Downloads when no
+    folder is given), from names, sizes, and dates only. Options that
+    belong to the screenshots court are refused with a plain error.
+    """
+    unsupported = [
+        ("--card", args.card is not None),
+        ("--svg", args.svg is not None),
+        ("--png", args.png is not None),
+        ("--badge", args.badge is not None),
+        ("--html", args.html is not None),
+        ("--wrapped-kit", args.wrapped_kit is not None),
+        ("--vs", args.vs is not None),
+        ("--vs-year", args.vs_year is not None),
+        ("--rematch", bool(args.rematch)),
+        ("--plea-bargain", bool(args.plea_bargain)),
+        ("--cleanup-list", args.cleanup_list is not None),
+        ("--judge-file", args.judge_file is not None),
+        ("--year", args.year is not None),
+        ("--since", args.since is not None),
+        ("--until", args.until is not None),
+        ("--csv", args.csv is not None),
+    ]
+    for flag, present in unsupported:
+        if present:
+            print(
+                f"snapjudgment: {flag} is not supported in the "
+                f"downloads court",
+                file=sys.stderr,
+            )
+            return 2
+
+    intensity = None
+    if args.intensity is not None:
+        try:
+            intensity = parse_intensity(args.intensity)
+        except SnapError as exc:
+            print(f"snapjudgment: {exc}", file=sys.stderr)
+            return 2
+
+    fail_rank = None
+    if args.fail_above is not None:
+        fail_key = _normalize_tier_name(args.fail_above)
+        if fail_key not in DL_TIER_RANKS:
+            print(
+                f"snapjudgment: unknown verdict tier for --fail-above: "
+                f"{args.fail_above!r}; valid tiers: "
+                f"{', '.join(DL_TIER_ORDER)}",
+                file=sys.stderr,
+            )
+            return 2
+        fail_rank = DL_TIER_RANKS[fail_key]
+
+    if args.folders:
+        folders = []
+        for raw in args.folders:
+            folder = Path(raw).expanduser()
+            if not folder.is_dir():
+                print(
+                    f"snapjudgment: folder not found: {raw}",
+                    file=sys.stderr,
+                )
+                return 2
+            folders.append(folder)
+    else:
+        default_folder = Path.home() / "Downloads"
+        if not default_folder.is_dir():
+            print(
+                f"snapjudgment: folder not found: {default_folder}",
+                file=sys.stderr,
+            )
+            return 2
+        folders = [default_folder]
+
+    skipped_box = [0]
+    files = collect_downloads(folders, skipped=skipped_box)
+    folder_names = [str(f) for f in folders]
+    folder_stats = [
+        {
+            "path": str(folder),
+            "count": sum(
+                1 for f in files if Path(f.path).is_relative_to(folder)
+            ),
+        }
+        for folder in folders
+    ]
+    judge_label = args.judge
+    voice = args.judge
+
+    if not files:
+        if args.json:
+            empty_data = {
+                "version": __version__,
+                "court": "downloads",
+                "folders": [
+                    {"path": name, "count": 0} for name in folder_names
+                ],
+                "verdict": "No Evidence",
+                "judge": judge_label,
+                "count": 0,
+                "skipped": skipped_box[0],
+                "awards": [],
+            }
+            if intensity is not None:
+                empty_data["commentary"] = downloads_commentary(
+                    {}, intensity
+                )
+            print(json.dumps(empty_data, indent=2))
+        else:
+            if args.oneline:
+                print("No Evidence · 0 files")
+            else:
+                print(render_downloads_no_evidence())
+                if intensity is not None:
+                    print(
+                        "  COMMENTARY: "
+                        + downloads_commentary({}, intensity)
+                    )
+            append_history({
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "folders": folder_names,
+                "count": 0,
+                "total_bytes": 0,
+                "verdict": "No Evidence",
+                "judge": judge_label,
+                "court": "downloads",
+            })
+        return 2
+
+    stats = analyze_downloads(files)
+    stats["skipped"] = skipped_box[0]
+    tier, sentence = downloads_verdict_for(stats["count"], voice=voice)
+    awards = compute_downloads_awards(stats)
+    commentary = None
+    if intensity is not None:
+        commentary = downloads_commentary(stats, intensity)
+
+    if args.out:
+        Path(args.out).write_text(
+            render_downloads_markdown(
+                stats, tier, sentence, awards, voice=voice,
+                commentary=commentary,
+            ),
+            encoding="utf-8",
+        )
+    if args.json:
+        data = build_downloads_json(
+            stats, tier, sentence, awards, folder_stats,
+            judge=judge_label, commentary=commentary,
+        )
+        print(json.dumps(data, indent=2))
+    else:
+        if args.oneline:
+            print(downloads_oneline(stats, tier))
+        else:
+            print(render_downloads_report(
+                stats, tier, sentence, awards, voice=voice,
+                commentary=commentary,
+            ))
+        append_history({
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "folders": folder_names,
+            "count": stats["count"],
+            "total_bytes": stats["total_bytes"],
+            "verdict": tier,
+            "judge": judge_label,
+            "court": "downloads",
+        })
+    if fail_rank is not None and dl_tier_rank(tier) > fail_rank:
+        return 1
+    return 0
+
+
 def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -2909,6 +3801,9 @@ def main(argv=None) -> int:
 
     explicit = explicitly_set(sys.argv[1:] if argv is None else argv)
     apply_config(args, explicit)
+
+    if args.court == "downloads":
+        return _run_downloads_court(args)
 
     since_year = None
     since_date = None
@@ -3086,6 +3981,7 @@ def main(argv=None) -> int:
             if args.json:
                 empty_data = {
                     "version": __version__,
+                    "court": "screenshots",
                     "folders": [
                         {"path": name, "count": 0} for name in folder_names
                     ],
@@ -3131,7 +4027,7 @@ def main(argv=None) -> int:
         stats["skipped"] = skipped_box[0]
         stats["date_filter"] = {"since": since_date, "until": until_date}
         tier, sentence = verdict_for(stats["count"], voice=voice)
-        awards = compute_awards(stats)
+        awards = compute_awards(stats, voice=voice)
         commentary = None
         if intensity is not None:
             commentary = court_commentary(stats, intensity)
@@ -3139,6 +4035,43 @@ def main(argv=None) -> int:
         plea = None
         if args.plea_bargain:
             plea = compute_plea_bargain(shots, args.plea_years, voice=voice)
+
+        cleanup = None
+        if args.cleanup_list is not None:
+            # The cleanup order IS the plea bargain, computed silently
+            # when the plea itself was not requested. Same function,
+            # same years: the two can never disagree.
+            cleanup_plea = (
+                plea if plea is not None
+                else compute_plea_bargain(
+                    shots, args.plea_years, voice=voice
+                )
+            )
+            cleanup = {
+                "file": args.cleanup_list,
+                "count": cleanup_plea["removed_count"],
+                "bytes": cleanup_plea["removed_bytes"],
+                "paths": cleanup_plea["removed_paths"],
+            }
+            header = [
+                "# Cleanup order issued by Snap Judgment.",
+                f"# {cleanup['count']} files, {cleanup['bytes']} bytes "
+                f"({human_bytes(cleanup['bytes'])}) would be removed: "
+                f"duplicate extras and screenshots older than "
+                f"{cleanup_plea['years']} "
+                f"year{'s' if cleanup_plea['years'] != 1 else ''}.",
+                "# The court deletes nothing. This list is yours to "
+                "act on, or not.",
+            ]
+            try:
+                Path(args.cleanup_list).write_text(
+                    "\n".join(header + cleanup["paths"]) + "\n",
+                    encoding="utf-8",
+                )
+            except OSError:
+                raise SnapError(
+                    f"could not write cleanup list: {args.cleanup_list}"
+                )
 
         versus = None
         vs_stats = None
@@ -3152,7 +4085,7 @@ def main(argv=None) -> int:
                 "stats": vs_stats,
                 "tier": vs_tier,
                 "sentence": vs_sentence,
-                "awards": compute_awards(vs_stats),
+                "awards": compute_awards(vs_stats, voice=voice),
                 "worse": worse_offender(stats, vs_stats),
             }
 
@@ -3274,6 +4207,12 @@ def main(argv=None) -> int:
                     "remaining_count": plea["remaining_count"],
                     "projected_tier": plea["projected_tier"],
                 }
+            if cleanup is not None:
+                data["cleanup_order"] = {
+                    "file": cleanup["file"],
+                    "count": cleanup["count"],
+                    "bytes": cleanup["bytes"],
+                }
             if args.rematch:
                 data["rematch"] = (
                     {
@@ -3299,6 +4238,13 @@ def main(argv=None) -> int:
                     print(render_year_comparison(vs_year))
                 if plea is not None:
                     print(render_plea_bargain(plea, tier))
+                if cleanup is not None:
+                    print(
+                        f"  CLEANUP ORDER: {cleanup['count']} files "
+                        f"({human_bytes(cleanup['bytes'])}) listed in "
+                        f"{cleanup['file']}. The court does not swing "
+                        f"the axe itself."
+                    )
                 if args.rematch:
                     print(render_rematch_section(rematch, tier))
                 if args.badge:

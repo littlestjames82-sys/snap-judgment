@@ -36,6 +36,8 @@ snapjudgment ~/Pictures --judge strict   # strict | fair | lenient presiding jud
 snapjudgment ~/Pictures --judge-file poet.json  # a custom judge voice from a JSON pack
 snapjudgment ~/Pictures --intensity roast  # court commentary at full roast (0-100 or gentle|kind|honest|spicy|roast)
 snapjudgment ~/Pictures --wrapped-kit ./kit     # year-scoped SVG card + ready-to-post drafts
+snapjudgment ~/Downloads --court downloads  # the downloads docket: a second court, for the downloads folder
+snapjudgment ~/Pictures --cleanup-list cleanup.txt  # the cleanup order: the exact files a plea bargain would remove
 snapjudgment ~/Pictures --plea-bargain   # the hypothetical verdict if you deleted the old and the duplicated
 snapjudgment ~/Pictures --rematch        # compare this hearing with the last one on record
 snapjudgment ~/Pictures --badge badge.svg  # a shields-style verdict badge for your README
@@ -120,6 +122,17 @@ complete example, **The Poet**, ships at `examples/judge-poet.json`. With
 `--json`, the report's `judge` field carries the pack's name. A malformed
 pack exits with code 2 and a plain message.
 
+A pack may also carry an `awards` object that renames awards by their
+stable keys (`night_owl`, `burst_mode`, `screenshot_streak`, and the
+rest; every award in the JSON report now carries its `key`). Each entry
+may override the display `name`, the `evidence` line, or both; the
+evidence is a template filled with the award's own stat values, so
+`"{night_count} hoots at {night_share:.1f}%."` renders with the real
+numbers. Entries keyed by an unknown award are warned about and
+ignored. **The Critic** (`judges/judge-critic.json`) shows the feature
+off: a dry film-critic judge whose Night Owl is entered into the record
+as *Nocturne in a Minor Key*.
+
 ### Configuration file
 
 Options you reach for every time can live in a `.snapjudgment.toml`.
@@ -140,8 +153,8 @@ The supported keys are `folders` (a list of paths, used when no folder
 argument is given), `judge` (`strict` | `fair` | `lenient`),
 `judge_file` (a custom judge pack, as with `--judge-file`),
 `plea_years` (an integer), `fail_above` (a verdict tier name),
-`all` (a boolean), and `intensity` (an integer 0-100 or a band name,
-as with `--intensity`). Python 3.11+ parses the file with `tomllib`; on
+`all` (a boolean), `intensity` (an integer 0-100 or a band name,
+as with `--intensity`), and `court` (`screenshots` | `downloads`). Python 3.11+ parses the file with `tomllib`; on
 3.9/3.10 a small built-in parser reads the same flat subset of TOML
 (top-level `key = value` lines). A config file that cannot be parsed,
 names an unknown judge or tier, or points at a judge pack that does not
@@ -178,6 +191,56 @@ remainder would earn. If the projected tier beats the real one, the court
 would accept the plea; if not, it notes for the record that the plea
 changes nothing. It is a projection, labeled as such - Snap Judgment
 never deletes, moves, or modifies anything it judges.
+
+`--cleanup-list FILE` turns the plea into paperwork: it writes the
+exact files the plea bargain would remove (duplicate extras plus
+screenshots older than `--plea-years`), one sorted path per line under
+a `#` header giving the count and bytes, and enters a `cleanup_order`
+object into the JSON report. It needs no `--plea-bargain` flag, and
+when both are given they always agree, because they are the same
+computation. The court issues the order; it does not swing the axe
+itself. What you do with the list is your business.
+
+### The downloads docket
+
+`--court downloads` convenes a second court for the folder where good
+intentions go to be forgotten. It judges the folder given on the
+command line, or `~/Downloads` when none is given, and it judges
+*every* file on the surface, any type, non-recursively, from names,
+sizes, and dates only. No file is ever opened.
+
+The evidence is the downloads folder's own: total files and size,
+installers (`.exe`, `.msi`, `.dmg`, `.pkg`, `.deb`, `.rpm`,
+`.appimage`) and archives, duplicate downloads (the `setup.exe`,
+`setup (1).exe`, `setup (2).exe` chains, counted by extra copies), the
+oldest and largest files, an extension census, and the share of files
+over a year old. The verdict tiers are the docket's own:
+
+| Files | Verdict |
+|---|---|
+| 0 | No Evidence |
+| 1-24 | Tidy Desk |
+| 25-99 | Mild Clutter |
+| 100-249 | Digital Junk Drawer |
+| 250-499 | Landfill Adjacent |
+| 500-999 | Hoarding Situation |
+| 1,000+ | Superfund Site |
+
+Its awards are its own too: **Installer Archaeologist** (10 or more
+installers), **Zip Hoarder** (15 or more archives), **Double
+Downloader** (5 or more duplicate extra copies), **Ancient Relic**
+(the oldest file is at least 3 years old), **Gigabyte Landfill** (5 GB
+or more in total), **Still Seeding** (a `.torrent` file), **Receipt
+Keeper DX** (an invoice or receipt in a filename), and **Time
+Capsule** (60% or more of the files are over a year old). The
+terminal report, `--json`, `--out`, `--oneline`, `--fail-above`
+(against the docket's tiers), `--judge`, `--intensity` (with
+commentary written for downloads sins), and the court record all
+work in this court; the screenshots court's cards, comparisons, plea
+bargain, cleanup order, judge packs, and date filters are refused
+with a plain error. A sample hearing is at
+`examples/downloads-demo-output.txt`. `--court` can also live in the
+config file.
 
 ### Rematch
 

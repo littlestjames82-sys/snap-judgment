@@ -11,9 +11,13 @@ _snapjudgment() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    local opts="--all --json --card --svg --png --out --html --since --until --year --plea-bargain --plea-years --rematch --badge --vs --vs-year --wrapped-kit --fail-above --judge --judge-file --intensity --oneline --csv --history --version --help"
+    local opts="--court --all --json --card --svg --png --out --html --since --until --year --plea-bargain --plea-years --cleanup-list --rematch --badge --vs --vs-year --wrapped-kit --fail-above --judge --judge-file --intensity --oneline --csv --history --version --help"
 
     case "$prev" in
+        --court)
+            COMPREPLY=( $(compgen -W "screenshots downloads" -- "$cur") )
+            return 0
+            ;;
         --judge)
             COMPREPLY=( $(compgen -W "strict fair lenient" -- "$cur") )
             return 0
@@ -26,7 +30,7 @@ _snapjudgment() {
             COMPREPLY=( $(compgen -W "'Innocent Bystander' 'Petty Offender' 'Repeat Offender' 'Habitual Hoarder' 'Felony-Level Archivist' 'Unrepentant Screenshot Felon'" -- "$cur") )
             return 0
             ;;
-        --card|--svg|--png|--out|--html|--badge|--csv|--judge-file|--wrapped-kit)
+        --card|--svg|--png|--out|--html|--badge|--csv|--judge-file|--wrapped-kit|--cleanup-list)
             # options that name a file to write (or, for --judge-file, read)
             COMPREPLY=( $(compgen -f -- "$cur") )
             return 0

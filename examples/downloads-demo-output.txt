@@ -1,0 +1,35 @@
+==============================================================
+SNAP JUDGMENT - THE DOWNLOADS DOCKET
+==============================================================
+
+THE VERDICT
+  Digital Junk Drawer
+  117 files, 828.4 MB of evidence,
+  spanning Mar 4, 2022 to Oct 15, 2026.
+
+THE EVIDENCE
+  Total files                    117
+  Total size                     828.4 MB (868,639,180 bytes)
+  Largest file                   PhotoApp.AppImage (91.6 MB)
+  Date span                      Mar 4, 2022 - Oct 15, 2026 (1,687 days)
+  Oldest file                    readme-2019.txt (Mar 4, 2022)
+  Installers                     12 (286.0 MB)
+  Archives                       16
+  Duplicate downloads            4 groups, 6 extra copies
+  Duplicate waste                18.5 MB
+  Over a year old                47 (40.2%)
+  Top file types                 .pdf 14, .mp3 12, .png 11, .txt 11, .csv 10
+
+AWARDS
+  * Installer Archaeologist - 12 installers (286.0 MB) kept after their work was done. The court has excavated older civilizations with fewer setup files.
+  * Zip Hoarder - 16 archives on disk, still zipped. Whatever is inside them, it is staying inside them.
+  * Double Downloader - 6 extra copies of files the defendant already had, in 4 duplicate sets. Downloaded twice, trusted once.
+  * Ancient Relic - readme-2019.txt dates to Mar 4, 2022, over three years ago, and it is still here.
+  * Still Seeding - 1 torrent file on disk. The court does not ask what they point to. It never asks.
+  * Receipt Keeper DX - 2 files with invoice or receipt in the name. The tax folder sends its regards.
+
+THE SENTENCE
+  Sentence: probation. The downloads folder gets a check-in once a month.
+
+Judged from file names, sizes, and dates only. No file was opened.
+

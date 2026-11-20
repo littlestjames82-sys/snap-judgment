@@ -19,6 +19,7 @@ field falls back to the fair judge.
 | `intro` | string | One line opening the hearing. May use the placeholders `{tier}` and `{count}`. |
 | `sentences` | object | One sentence per verdict tier, keyed by the exact tier names below. Missing tiers fall back to the fair judge's sentence for that tier. |
 | `award_lead` | string | The line introducing the awards list. |
+| `awards` | object | Renames awards by stable key: `{award key: {"name": ..., "evidence": ...}}`. Either field may be omitted. `evidence` is a template filled with the award's own stat values (e.g. `{night_count}`, `{night_share:.1f}`); a template that does not fit falls back to the built-in evidence. Unknown keys are warned about and ignored. |
 
 The six verdict tiers, in ascending order of concern:
 
@@ -50,6 +51,11 @@ Rules of the format:
   mercy is not on the docket.
 - `judge-grandmother.json`: The Grandmother. Every screenshot is
   wonderful, dear, and she has seen the receipts to prove it.
+- `judge-critic.json`: The Critic. A dry film critic who reviews the
+  folder like a release he did not want to attend, and the first pack
+  to use the `awards` field: his Night Owl is *Nocturne in a Minor
+  Key*, his Burst Mode is *Rapid Montage*, and his Screenshot Streak
+  is *The Long Run*.
 
 The three built-in judges (`--judge strict`, `fair`, `lenient`) live in
 the tool itself and need no pack.

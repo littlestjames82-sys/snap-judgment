@@ -6,6 +6,7 @@
 
 _snapjudgment() {
     _arguments -s \
+        '--court=[which court sits]:court:(screenshots downloads)' \
         '--all[treat every image in the folders as a screenshot]' \
         '--json[print the verdict as JSON instead of the report]' \
         '--card=[write a self-contained HTML share card to FILE]:file:_files' \
@@ -18,6 +19,7 @@ _snapjudgment() {
         '--year=[only count screenshots from this single year]:year:' \
         '--plea-bargain[also compute the hypothetical verdict if duplicates and old screenshots were deleted]' \
         '--plea-years=[with --plea-bargain, screenshots older than this many years would go]:years:' \
+        '--cleanup-list=[write the cleanup order (the files a plea bargain would remove) to FILE]:file:_files' \
         '--rematch[compare this hearing against the last court record for the same folders]' \
         '--badge=[write a shields-style verdict badge (SVG) to FILE]:file:_files' \
         '--vs=[also judge FOLDER as a co-defendant and compare]:folder:_files -/' \

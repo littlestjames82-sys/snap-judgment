@@ -2915,6 +2915,684 @@ class FlatTomlTests(unittest.TestCase):
         self.assertEqual(data, {})
 
 
+def write_sized(folder, name, size, when=None):
+    """A file with an exact size (sparse, via truncate) and mtime."""
+    path = Path(folder) / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "wb") as fh:
+        fh.truncate(size)
+    if when is not None:
+        ts = when.timestamp()
+        os.utime(path, (ts, ts))
+    return path
+
+
+# ---------------------------------------------------------------------------
+# the downloads docket (v0.9.0)
+# ---------------------------------------------------------------------------
+
+class DownloadsCourtTests(TempDirCase):
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = sj.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def seed(self, specs):
+        """specs: list of (name, size, datetime)."""
+        for name, size, when in specs:
+            write_sized(self.root, name, size, when)
+
+    def filler(self, n, size=1000, start=datetime(2026, 6, 1, 12, 0)):
+        return [
+            (f"file_{i:04d}.dat", size, start + timedelta(days=i % 28))
+            for i in range(n)
+        ]
+
+    def dl_stats(self):
+        files = sj.collect_downloads([self.root])
+        return sj.analyze_downloads(files)
+
+    # -- tiers ---------------------------------------------------------
+
+    def test_tier_boundaries(self):
+        cases = {
+            1: "Tidy Desk", 24: "Tidy Desk",
+            25: "Mild Clutter", 99: "Mild Clutter",
+            100: "Digital Junk Drawer", 249: "Digital Junk Drawer",
+            250: "Landfill Adjacent", 499: "Landfill Adjacent",
+            500: "Hoarding Situation", 999: "Hoarding Situation",
+            1000: "Superfund Site", 5000: "Superfund Site",
+        }
+        for count, tier in cases.items():
+            with self.subTest(count=count):
+                self.assertEqual(sj.downloads_verdict_for(count)[0], tier)
+        self.assertEqual(sj.downloads_verdict_for(0)[0], "No Evidence")
+
+    def test_no_evidence_exit_2(self):
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads"]
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("THE DOWNLOADS DOCKET", out)
+        self.assertIn("No Evidence", out)
+
+    def test_terminal_report_shape(self):
+        self.seed(self.filler(30))
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("SNAP JUDGMENT - THE DOWNLOADS DOCKET", out)
+        self.assertIn("Mild Clutter", out)
+        self.assertIn("30 files", out)
+        self.assertIn(
+            "Judged from file names, sizes, and dates only.", out
+        )
+
+    def test_nonrecursive(self):
+        self.seed(self.filler(3))
+        sub = self.root / "subfolder"
+        for i in range(7):
+            write_sized(sub, f"inner_{i}.dat", 10,
+                        datetime(2026, 6, 1, 12, 0))
+        self.assertEqual(self.dl_stats()["count"], 3)
+
+    # -- awards ----------------------------------------------------------
+
+    def award_keys(self, stats):
+        return {a["key"] for a in sj.compute_downloads_awards(stats)}
+
+    def test_award_installer_archaeologist(self):
+        base = datetime(2026, 6, 1, 12, 0)
+        self.seed([(f"tool{i}.exe", 100, base) for i in range(10)])
+        self.assertIn(
+            "installer_archaeologist", self.award_keys(self.dl_stats())
+        )
+        other = self.root / "nine"
+        for i in range(9):
+            write_sized(other, f"tool{i}.exe", 100, base)
+        stats = sj.analyze_downloads(sj.collect_downloads([other]))
+        self.assertNotIn(
+            "installer_archaeologist", self.award_keys(stats)
+        )
+
+    def test_award_zip_hoarder(self):
+        base = datetime(2026, 6, 1, 12, 0)
+        self.seed([(f"pack{i}.zip", 100, base) for i in range(15)])
+        self.assertIn("zip_hoarder", self.award_keys(self.dl_stats()))
+
+    def test_award_ancient_relic_and_time_capsule(self):
+        old = datetime(2022, 1, 1, 12, 0)
+        new = datetime(2026, 6, 1, 12, 0)
+        specs = [(f"old{i}.txt", 100, old) for i in range(6)]
+        specs += [(f"new{i}.txt", 100, new) for i in range(4)]
+        self.seed(specs)
+        keys = self.award_keys(self.dl_stats())
+        self.assertIn("ancient_relic", keys)      # oldest is 4+ years old
+        self.assertIn("time_capsule", keys)       # 60% over a year old
+
+    def test_award_gigabyte_landfill(self):
+        self.seed([("huge.iso", 5 * 1024 ** 3 + 1,
+                    datetime(2026, 6, 1, 12, 0))])
+        self.assertIn(
+            "gigabyte_landfill", self.award_keys(self.dl_stats())
+        )
+
+    def test_award_still_seeding_and_receipt_keeper(self):
+        base = datetime(2026, 6, 1, 12, 0)
+        self.seed([
+            ("linux.torrent", 100, base),
+            ("invoice-march.pdf", 100, base),
+            ("plain.txt", 100, base),
+        ])
+        keys = self.award_keys(self.dl_stats())
+        self.assertIn("still_seeding", keys)
+        self.assertIn("receipt_keeper_dx", keys)
+
+    def test_no_awards_on_a_clean_desk(self):
+        self.seed(self.filler(5))
+        self.assertEqual(sj.compute_downloads_awards(self.dl_stats()), [])
+
+    # -- duplicate downloads --------------------------------------------
+
+    def test_duplicate_grouping_chains(self):
+        base = datetime(2026, 6, 1, 12, 0)
+        self.seed([
+            ("setup.exe", 500, base),
+            ("setup (1).exe", 500, base),
+            ("setup (2).exe", 500, base),
+            ("report.pdf", 300, base),
+            ("report copy.pdf", 300, base),
+            ("unique.txt", 100, base),
+        ])
+        stats = self.dl_stats()
+        self.assertEqual(stats["duplicate_groups"], 2)
+        self.assertEqual(stats["duplicate_extra"], 3)
+        self.assertEqual(stats["duplicate_extra_bytes"], 500 * 2 + 300)
+        keys = self.award_keys(stats)
+        self.assertNotIn("double_downloader", keys)  # needs 5 extras
+
+    def test_double_downloader_award(self):
+        base = datetime(2026, 6, 1, 12, 0)
+        specs = []
+        for stem in ("a", "b", "c"):
+            specs.append((f"{stem}.exe", 100, base))
+            specs.append((f"{stem} (1).exe", 100, base))
+            specs.append((f"{stem} (2).exe", 100, base))
+        self.seed(specs)
+        stats = self.dl_stats()
+        self.assertEqual(stats["duplicate_extra"], 6)
+        self.assertIn("double_downloader", self.award_keys(stats))
+
+    # -- outputs ---------------------------------------------------------
+
+    def test_json_shape(self):
+        base = datetime(2026, 6, 1, 12, 0)
+        self.seed([(f"tool{i}.exe", 100, base) for i in range(12)])
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads", "--json"]
+        )
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual(data["court"], "downloads")
+        self.assertEqual(data["verdict"], "Tidy Desk")
+        self.assertEqual(data["count"], 12)
+        self.assertEqual(data["installers"]["count"], 12)
+        self.assertEqual(data["extensions"][0]["ext"], ".exe")
+        self.assertEqual(
+            data["awards"][0]["key"], "installer_archaeologist"
+        )
+
+    def test_screenshots_json_gains_court(self):
+        write_file(self.root, "screenshot_a.png", make_png(10, 10),
+                   datetime(2026, 6, 1, 12, 0))
+        code, out, _ = self.run_main([str(self.root), "--json"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["court"], "screenshots")
+
+    def test_markdown_out(self):
+        self.seed(self.filler(30))
+        md = self.root / "docket.md"
+        code, _, _ = self.run_main(
+            [str(self.root), "--court", "downloads", "--out", str(md)]
+        )
+        self.assertEqual(code, 0)
+        text = md.read_text(encoding="utf-8")
+        self.assertIn("The Downloads Docket", text)
+        self.assertIn("Mild Clutter", text)
+        self.assertIn("Judged from file names, sizes, and dates only.",
+                      text)
+
+    def test_oneline(self):
+        self.seed(self.filler(30))
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads", "--oneline"]
+        )
+        self.assertEqual(code, 0)
+        lines = [line for line in out.splitlines() if line.strip()]
+        self.assertEqual(len(lines), 1)
+        self.assertIn("Mild Clutter", lines[0])
+        self.assertIn("30 files", lines[0])
+
+    # -- fail-above, judges, intensity -----------------------------------
+
+    def test_fail_above_downloads(self):
+        self.seed(self.filler(100))  # Digital Junk Drawer
+        code, _, _ = self.run_main(
+            [str(self.root), "--court", "downloads",
+             "--fail-above", "Mild Clutter"]
+        )
+        self.assertEqual(code, 1)
+        code, _, _ = self.run_main(
+            [str(self.root), "--court", "downloads",
+             "--fail-above", "Digital Junk Drawer"]
+        )
+        self.assertEqual(code, 0)
+        code, _, err = self.run_main(
+            [str(self.root), "--court", "downloads",
+             "--fail-above", "Repeat Offender"]  # a screenshots tier
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("Superfund Site", err)
+
+    def test_unsupported_flags_error(self):
+        self.seed(self.filler(3))
+        for flag, value in (("--png", "card.png"), ("--vs", str(self.root)),
+                            ("--csv", "x.csv"), ("--plea-bargain", None)):
+            argv = [str(self.root), "--court", "downloads", flag]
+            if value is not None:
+                argv.append(value)
+            with self.subTest(flag=flag):
+                code, _, err = self.run_main(argv)
+                self.assertEqual(code, 2)
+                self.assertIn(flag, err)
+                self.assertIn("downloads court", err)
+
+    def test_judge_strict_applies(self):
+        self.seed(self.filler(30))  # Mild Clutter
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads", "--judge", "strict"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("Presiding: The Hanging Judge", out)
+        self.assertIn(
+            "Sentence: the installers are deleted today. "
+            "Not tomorrow. Today.", out,
+        )
+
+    def test_intensity_commentary_downloads(self):
+        base = datetime(2026, 6, 1, 12, 0)
+        specs = []
+        for stem in ("a", "b", "c"):
+            specs.append((f"{stem}.exe", 100, base))
+            specs.append((f"{stem} (1).exe", 100, base))
+            specs.append((f"{stem} (2).exe", 100, base))
+        self.seed(specs)
+        code, gentle, _ = self.run_main(
+            [str(self.root), "--court", "downloads",
+             "--intensity", "gentle"]
+        )
+        self.assertEqual(code, 0)
+        code, roast, _ = self.run_main(
+            [str(self.root), "--court", "downloads",
+             "--intensity", "roast"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn(
+            "COMMENTARY: The court found 6 files that were downloaded "
+            "more than once", gentle,
+        )
+        self.assertIn(
+            "COMMENTARY: 6 duplicate downloads. The court has now "
+            "reviewed the same installer multiple times", roast,
+        )
+        self.assertNotEqual(gentle, roast)
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads",
+             "--intensity", "roast", "--json"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("duplicate downloads",
+                      json.loads(out)["commentary"])
+
+    def test_all_flag_accepted_and_ignored(self):
+        self.seed(self.filler(3))
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads", "--all"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("Tidy Desk", out)
+
+    # -- default folder, history, config ---------------------------------
+
+    def test_default_folder_is_home_downloads(self):
+        downloads = self.root / "Downloads"
+        for i in range(3):
+            write_sized(downloads, f"f{i}.dat", 10,
+                        datetime(2026, 6, 1, 12, 0))
+        with mock.patch.object(sj.Path, "home", return_value=self.root):
+            code, out, _ = self.run_main(["--court", "downloads"])
+        self.assertEqual(code, 0)
+        self.assertIn("Tidy Desk", out)
+
+    def test_default_folder_missing_errors(self):
+        with mock.patch.object(sj.Path, "home", return_value=self.root):
+            code, _, err = self.run_main(["--court", "downloads"])
+        self.assertEqual(code, 2)
+        self.assertIn("folder not found", err)
+
+    def test_history_records_downloads_hearing(self):
+        hist_file = self.root / "court" / "history.jsonl"
+        patcher = mock.patch.object(
+            sj, "history_path", return_value=hist_file
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.seed(self.filler(3))
+        code, _, _ = self.run_main(
+            [str(self.root), "--court", "downloads"]
+        )
+        self.assertEqual(code, 0)
+        records = [
+            json.loads(line)
+            for line in hist_file.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["court"], "downloads")
+        self.assertEqual(records[0]["verdict"], "Tidy Desk")
+        self.assertEqual(records[0]["count"], 3)
+        code, out, _ = self.run_main(["--history"])
+        self.assertEqual(code, 0)
+        self.assertIn("3 files", out)
+
+    def test_config_court_key(self):
+        work = self.root / "work"
+        work.mkdir()
+        shots = self.root / "shots"
+        shots.mkdir()
+        write_file(shots, "screenshot_a.png", make_png(10, 10),
+                   datetime(2026, 6, 1, 12, 0))
+        old_cwd = os.getcwd()
+        os.chdir(work)
+        self.addCleanup(os.chdir, old_cwd)
+        (work / ".snapjudgment.toml").write_text(
+            'court = "downloads"\n', encoding="utf-8"
+        )
+        code, out, _ = self.run_main([str(shots)])
+        self.assertEqual(code, 0)
+        self.assertIn("THE DOWNLOADS DOCKET", out)
+
+    def test_config_court_invalid_warns_and_ignores(self):
+        work = self.root / "work"
+        work.mkdir()
+        shots = self.root / "shots"
+        shots.mkdir()
+        write_file(shots, "screenshot_a.png", make_png(10, 10),
+                   datetime(2026, 6, 1, 12, 0))
+        old_cwd = os.getcwd()
+        os.chdir(work)
+        self.addCleanup(os.chdir, old_cwd)
+        (work / ".snapjudgment.toml").write_text(
+            'court = "banana"\n', encoding="utf-8"
+        )
+        code, out, err = self.run_main([str(shots)])
+        self.assertEqual(code, 0)
+        self.assertIn("warning", err)
+        self.assertIn("The Court of Screenshot Affairs", out)
+
+
+# ---------------------------------------------------------------------------
+# judge pack award overrides (v0.9.0)
+# ---------------------------------------------------------------------------
+
+class AwardOverrideTests(TempDirCase):
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = sj.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def seed_night(self):
+        """30 night screenshots: 8 in one minute (a burst), then one a
+        day for 22 more days (a streak). Night Owl, Burst Mode, and
+        Screenshot Streak all fire."""
+        base = datetime(2026, 6, 1, 23, 0, 0)
+        for i in range(8):
+            write_file(self.root, f"screenshot_burst_{i}.png",
+                       make_png(100, 100), base + timedelta(seconds=5 * i))
+        for i in range(22):
+            write_file(self.root, f"screenshot_night_{i}.png",
+                       make_png(100, 100),
+                       base + timedelta(days=i + 1, minutes=30))
+
+    def write_pack(self, pack, name="pack.json"):
+        path = self.root / name
+        path.write_text(json.dumps(pack), encoding="utf-8")
+        return path
+
+    def awards_by_key(self, argv):
+        code, out, err = self.run_main(argv + ["--json"])
+        self.assertEqual(code, 0, err)
+        return {a["key"]: a for a in json.loads(out)["awards"]}
+
+    def test_name_only_override_keeps_builtin_evidence(self):
+        self.seed_night()
+        pack = self.write_pack({
+            "name": "The Renamer",
+            "awards": {"night_owl": {"name": "Hoot Hoot"}},
+        })
+        awards = self.awards_by_key(
+            [str(self.root), "--judge-file", str(pack)]
+        )
+        self.assertEqual(awards["night_owl"]["name"], "Hoot Hoot")
+        self.assertIn(
+            "30 screenshots between 10 PM and 5 AM",
+            awards["night_owl"]["evidence"],
+        )
+
+    def test_evidence_only_override_keeps_builtin_name(self):
+        self.seed_night()
+        pack = self.write_pack({
+            "name": "The Rewriter",
+            "awards": {
+                "night_owl": {
+                    "evidence": "{night_count} hoots at "
+                                "{night_share:.1f}% after dark.",
+                },
+            },
+        })
+        awards = self.awards_by_key(
+            [str(self.root), "--judge-file", str(pack)]
+        )
+        self.assertEqual(awards["night_owl"]["name"], "Night Owl")
+        self.assertEqual(
+            awards["night_owl"]["evidence"],
+            "30 hoots at 100.0% after dark.",
+        )
+
+    def test_both_overridden(self):
+        self.seed_night()
+        pack = self.write_pack({
+            "name": "The Full Rewrite",
+            "awards": {
+                "burst_mode": {
+                    "name": "Rapid Fire",
+                    "evidence": "{burst_record} shots in a minute. "
+                                "A personal record, regrettably.",
+                },
+            },
+        })
+        awards = self.awards_by_key(
+            [str(self.root), "--judge-file", str(pack)]
+        )
+        self.assertEqual(awards["burst_mode"]["name"], "Rapid Fire")
+        self.assertEqual(
+            awards["burst_mode"]["evidence"],
+            "8 shots in a minute. A personal record, regrettably.",
+        )
+
+    def test_unknown_award_key_warns_and_is_ignored(self):
+        self.seed_night()
+        pack = self.write_pack({
+            "name": "The Optimist",
+            "awards": {
+                "best_hair": {"name": "Great Hair"},
+                "night_owl": {"name": "Hoot Hoot"},
+            },
+        })
+        code, out, err = self.run_main(
+            [str(self.root), "--judge-file", str(pack)]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("unknown award", err)
+        self.assertIn("best_hair", err)
+        self.assertIn("Hoot Hoot", out)
+
+    def test_malformed_awards_exit_2(self):
+        self.seed_night()
+        for bad in ({"name": "X", "awards": []},
+                    {"name": "X", "awards": {"night_owl": {"name": 5}}},
+                    {"name": "X", "awards": {"night_owl": {}}}):
+            with self.subTest(bad=bad):
+                pack = self.write_pack(bad, name="bad.json")
+                code, _, err = self.run_main(
+                    [str(self.root), "--judge-file", str(pack)]
+                )
+                self.assertEqual(code, 2)
+                self.assertIn("awards", err)
+
+    def test_pack_without_awards_unchanged(self):
+        self.seed_night()
+        pack = self.write_pack({"name": "The Plain Judge"})
+        awards = self.awards_by_key(
+            [str(self.root), "--judge-file", str(pack)]
+        )
+        self.assertEqual(awards["night_owl"]["name"], "Night Owl")
+        self.assertEqual(awards["burst_mode"]["name"], "Burst Mode")
+        self.assertEqual(
+            awards["screenshot_streak"]["name"], "Screenshot Streak"
+        )
+
+    def test_critic_pack_renames_in_a_real_run(self):
+        self.seed_night()
+        pack = (
+            Path(__file__).resolve().parent.parent
+            / "judges" / "judge-critic.json"
+        )
+        code, out, _ = self.run_main(
+            [str(self.root), "--judge-file", str(pack)]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("Presiding: The Critic", out)
+        self.assertIn("Nocturne in a Minor Key", out)
+        self.assertIn("Rapid Montage", out)
+        self.assertIn("The Long Run", out)
+        awards = self.awards_by_key(
+            [str(self.root), "--judge-file", str(pack)]
+        )
+        self.assertEqual(
+            awards["night_owl"]["name"], "Nocturne in a Minor Key"
+        )
+        self.assertIn("shot entirely at night",
+                      awards["night_owl"]["evidence"])
+
+
+# ---------------------------------------------------------------------------
+# the cleanup order (v0.9.0)
+# ---------------------------------------------------------------------------
+
+class CleanupOrderTests(TempDirCase):
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = sj.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def seed_plea_folder(self):
+        """6 screenshots: 1 newest, a duplicate trio, 2 old (2023)."""
+        png = make_png(100, 100)
+        write_file(self.root, "screenshot_new.png", make_png(200, 200),
+                   datetime(2026, 6, 1, 12, 0))
+        for i in range(3):
+            write_file(self.root, f"screenshot_dup{i}.png", png,
+                       datetime(2026, 5, 1, 12, 0) + timedelta(days=i))
+        write_file(self.root, "screenshot_old1.png",
+                   make_png(50, 50, pad=10), datetime(2023, 1, 1, 12, 0))
+        write_file(self.root, "screenshot_old2.png",
+                   make_png(60, 60, pad=20), datetime(2023, 6, 1, 12, 0))
+
+    def expected_plea(self, years=2):
+        shots, _recordings = sj.collect([self.root])
+        return sj.compute_plea_bargain(shots, years)
+
+    def list_lines(self, path):
+        return path.read_text(encoding="utf-8").splitlines()
+
+    def test_exact_contents_and_header(self):
+        self.seed_plea_folder()
+        plea = self.expected_plea()
+        target = self.root / "cleanup.txt"
+        code, _, _ = self.run_main(
+            [str(self.root), "--cleanup-list", str(target)]
+        )
+        self.assertEqual(code, 0)
+        lines = self.list_lines(target)
+        header = [line for line in lines if line.startswith("#")]
+        paths = [line for line in lines if not line.startswith("#")]
+        self.assertTrue(header)
+        self.assertIn(
+            f"{plea['removed_count']} files", header[1]
+        )
+        self.assertIn(f"{plea['removed_bytes']} bytes", header[1])
+        self.assertEqual(paths, plea["removed_paths"])
+        self.assertEqual(paths, sorted(paths))
+        self.assertEqual(len(paths), 4)
+
+    def test_terminal_line(self):
+        self.seed_plea_folder()
+        target = self.root / "cleanup.txt"
+        code, out, _ = self.run_main(
+            [str(self.root), "--cleanup-list", str(target)]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("CLEANUP ORDER: 4 files (", out)
+        self.assertIn(f"listed in {target}", out)
+        self.assertIn("The court does not swing the axe itself.", out)
+        self.assertNotIn("THE PLEA BARGAIN", out)
+
+    def test_json_cleanup_order(self):
+        self.seed_plea_folder()
+        plea = self.expected_plea()
+        target = self.root / "cleanup.txt"
+        code, out, _ = self.run_main(
+            [str(self.root), "--cleanup-list", str(target), "--json"]
+        )
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual(
+            data["cleanup_order"],
+            {"file": str(target), "count": plea["removed_count"],
+             "bytes": plea["removed_bytes"]},
+        )
+        self.assertNotIn("plea_bargain", data)
+
+    def test_no_delete_invariant(self):
+        self.seed_plea_folder()
+        before = sorted(p.name for p in self.root.iterdir())
+        target = self.root / "cleanup.txt"
+        code, _, _ = self.run_main(
+            [str(self.root), "--cleanup-list", str(target)]
+        )
+        self.assertEqual(code, 0)
+        for name in before:
+            self.assertTrue((self.root / name).is_file(), name)
+
+    def test_agrees_with_plea_bargain(self):
+        self.seed_plea_folder()
+        target = self.root / "cleanup.txt"
+        code, out, _ = self.run_main(
+            [str(self.root), "--plea-bargain",
+             "--cleanup-list", str(target), "--json"]
+        )
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual(
+            data["cleanup_order"]["count"],
+            data["plea_bargain"]["removed_count"],
+        )
+        self.assertEqual(
+            data["cleanup_order"]["bytes"],
+            data["plea_bargain"]["removed_bytes"],
+        )
+        paths = [
+            line for line in self.list_lines(target)
+            if not line.startswith("#")
+        ]
+        self.assertEqual(len(paths), data["plea_bargain"]["removed_count"])
+
+    def test_plea_years_respected(self):
+        self.seed_plea_folder()
+        target = self.root / "cleanup.txt"
+        code, out, _ = self.run_main(
+            [str(self.root), "--cleanup-list", str(target),
+             "--plea-years", "0", "--json"]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["cleanup_order"]["count"], 5)
+
+    def test_cleanup_in_downloads_court_errors(self):
+        target = self.root / "cleanup.txt"
+        code, _, err = self.run_main(
+            [str(self.root), "--court", "downloads",
+             "--cleanup-list", str(target)]
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("--cleanup-list", err)
+        self.assertFalse(target.exists())
+
+
 # ---------------------------------------------------------------------------
 # roast intensity and court commentary (v0.8.0)
 # ---------------------------------------------------------------------------
