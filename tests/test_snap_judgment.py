@@ -2748,11 +2748,16 @@ class ConfigTests(TempDirCase):
             text, encoding="utf-8"
         )
 
+    def toml_path(self, path):
+        # TOML basic strings treat backslashes as escapes, so a Windows
+        # path interpolated raw makes tomllib reject the whole config.
+        return str(path).replace("\\", "\\\\")
+
     def test_config_supplies_folders_and_judge(self):
         self.seed(self.shots)
         self.write_config(
             self.work,
-            f'folders = ["{self.shots}"]\njudge = "strict"\n',
+            f'folders = ["{self.toml_path(self.shots)}"]\njudge = "strict"\n',
         )
         os.chdir(self.work)
         code, out, _ = self.run_main(["--json"])
@@ -2768,7 +2773,7 @@ class ConfigTests(TempDirCase):
         self.seed(other, n=5)
         self.write_config(
             self.work,
-            f'folders = ["{self.shots}"]\njudge = "strict"\n',
+            f'folders = ["{self.toml_path(self.shots)}"]\njudge = "strict"\n',
         )
         os.chdir(self.work)
         code, out, _ = self.run_main(
@@ -2835,7 +2840,7 @@ class ConfigTests(TempDirCase):
             json.dumps({"name": "The Test Judge", "sentences": {}}),
             encoding="utf-8",
         )
-        self.write_config(self.work, f'judge_file = "{pack}"\n')
+        self.write_config(self.work, f'judge_file = "{self.toml_path(pack)}"\n')
         os.chdir(self.work)
         code, out, _ = self.run_main([str(self.shots), "--json"])
         self.assertEqual(code, 0)
@@ -2844,7 +2849,7 @@ class ConfigTests(TempDirCase):
     def test_config_missing_judge_file_warns_and_run_succeeds(self):
         self.seed(self.shots)
         self.write_config(
-            self.work, f'judge_file = "{self.work}/no-such-pack.json"\n'
+            self.work, f'judge_file = "{self.toml_path(self.work)}/no-such-pack.json"\n'
         )
         os.chdir(self.work)
         code, out, err = self.run_main([str(self.shots), "--json"])
