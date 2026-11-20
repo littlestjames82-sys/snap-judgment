@@ -1,5 +1,6 @@
 # Snap Judgment
 
+[![PyPI](https://img.shields.io/pypi/v/snap-judgment)](https://pypi.org/project/snap-judgment/)
 [![CI](https://github.com/littlestjames82-sys/snap-judgment/actions/workflows/ci.yml/badge.svg)](https://github.com/littlestjames82-sys/snap-judgment/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/github/license/littlestjames82-sys/snap-judgment)](LICENSE)
