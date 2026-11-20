@@ -2932,6 +2932,17 @@ def write_sized(folder, name, size, when=None):
 # ---------------------------------------------------------------------------
 
 class DownloadsCourtTests(TempDirCase):
+    def setUp(self):
+        super().setUp()
+        self._old_cwd = os.getcwd()
+
+    def tearDown(self):
+        # Restore the cwd BEFORE the temp tree is removed: on Windows a
+        # directory that is the process cwd cannot be deleted (WinError 32),
+        # and addCleanup callbacks run after tearDown, too late.
+        os.chdir(self._old_cwd)
+        super().tearDown()
+
     def run_main(self, argv):
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
