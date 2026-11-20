@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "snap-judgment"
-version = "0.5.0"
+version = "0.6.0"
 description = "Snap Judgment issues a courtroom-style verdict on your screenshot habits, computed from file metadata only. It never decodes image pixels and never uploads anything."
 readme = "README.md"
 requires-python = ">=3.9"

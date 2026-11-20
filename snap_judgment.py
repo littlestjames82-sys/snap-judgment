@@ -40,7 +40,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from xml.sax.saxutils import escape as _xml_escape
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 # ---------------------------------------------------------------------------
 # detection
@@ -55,7 +55,13 @@ _NAME_HINTS = (
     "screen_shot",
     "screen-shot",
     "cleanshot",
-    "bildschirmfoto",
+    "bildschirmfoto",          # German
+    "capture d'écran",         # French (macOS)
+    "capture d'ecran",         # French, unaccented
+    "capture d’écran",    # French, typographic apostrophe
+    "captura de pantalla",     # Spanish
+    "スクリーンショット",            # Japanese
+    "zrzut ekranu",            # Polish
 )
 
 
@@ -480,6 +486,33 @@ def analyze(shots: list[Shot], recordings: list[Shot]) -> dict:
             j += 1
         burst = max(burst, j - i + 1)
 
+    # busiest hour window: most screenshots inside any rolling 60-minute
+    # window that starts at a screenshot's own timestamp
+    ordered = sorted(shots, key=lambda s: s.mtime)
+    window_count = 0
+    window_start = ordered[0].dt
+    j = 0
+    for i, shot in enumerate(ordered):
+        j = max(j, i)
+        while j + 1 < len(ordered) and ordered[j + 1].mtime - shot.mtime <= 3600:
+            j += 1
+        if j - i + 1 > window_count:
+            window_count = j - i + 1
+            window_start = shot.dt
+    busiest_window = {"count": window_count, "start": window_start}
+
+    # hour x weekday heatmap: 7 rows (Monday first) of 24 hour counts
+    heatmap = [[0] * 24 for _ in range(7)]
+    for s in shots:
+        heatmap[s.dt.weekday()][s.dt.hour] += 1
+
+    # the earliest screenshot dated in the future, if any (time travel)
+    future_shot = None
+    for s in shots:
+        if s.dt > now:
+            future_shot = {"name": s.name, "date": s.dt.date()}
+            break
+
     # duplicate suspects: groups sharing exact (size, dimensions)
     groups: dict = defaultdict(int)
     for s in shots:
@@ -596,6 +629,9 @@ def analyze(shots: list[Shot], recordings: list[Shot]) -> dict:
         "longest_gap_start": longest_gap_start,
         "longest_gap_end": longest_gap_end,
         "burst_record": burst,
+        "busiest_window": busiest_window,
+        "heatmap": heatmap,
+        "future_shot": future_shot,
         "duplicate_groups": dup_groups,
         "duplicate_files": dup_files,
         "duplicate_bytes_wasted": duplicate_bytes_wasted,
@@ -868,9 +904,16 @@ def compute_awards(stats: dict, now: datetime | None = None) -> list[dict]:
             "evidence": f"The screenshots alone total {stats['total_human']}. "
                         f"The evidence locker needs a bigger room.",
         })
-    if stats["span_days"] >= 4 * 365:
+    if stats.get("future_shot") is not None:
+        future = stats["future_shot"]
         awards.append({
             "name": "Time Traveler",
+            "evidence": f"{future['name']} is dated {_fmt_date(future['date'])}, "
+                        f"which has not happened yet. The court admits it anyway.",
+        })
+    if stats["span_days"] >= 4 * 365:
+        awards.append({
+            "name": "The Long Haul",
             "evidence": f"The collection spans {stats['span_days'] / 365.25:.1f} years of screenshots.",
         })
     if stats["span_days"] >= 8 * 365:
@@ -878,6 +921,13 @@ def compute_awards(stats: dict, now: datetime | None = None) -> list[dict]:
             "name": "Lifer",
             "evidence": f"The collection spans {stats['span_days'] / 365.25:.1f} years. "
                         f"The screenshots have seniority now.",
+        })
+    if stats["span_days"] >= 10 * 365:
+        awards.append({
+            "name": "Ancient Relic",
+            "evidence": f"{stats['oldest_name']} dates to "
+                        f"{_fmt_date(stats['oldest_date'])}, over ten years "
+                        f"before the newest screenshot in evidence.",
         })
     if stats["anniversary"] is not None and stats["anniversary"]["count"] >= 15:
         anniv = stats["anniversary"]
@@ -904,6 +954,93 @@ def compute_awards(stats: dict, now: datetime | None = None) -> list[dict]:
             "evidence": f"Only {count} screenshots. The court rarely sees such restraint.",
         })
     return awards
+
+
+# ---------------------------------------------------------------------------
+# the plea bargain: a purely hypothetical cleanup, computed read-only
+# ---------------------------------------------------------------------------
+
+def _minus_years(d: date, years: int) -> date:
+    """A date `years` before d (Feb 29 lands on Feb 28)."""
+    try:
+        return d.replace(year=d.year - years)
+    except ValueError:
+        return d.replace(year=d.year - years, day=28)
+
+
+def compute_plea_bargain(shots: list[Shot], plea_years: int,
+                         voice: str = "fair") -> dict:
+    """What would happen IF the defendant deleted (a) every duplicate
+    suspect except one keeper per exact size+dimensions group, and
+    (b) every screenshot older than `plea_years` years, measured from
+    the newest screenshot's date. Nothing is deleted; this is math."""
+    newest_date = max(s.dt.date() for s in shots)
+    cutoff = _minus_years(newest_date, plea_years)
+
+    groups: dict = defaultdict(list)
+    for s in shots:
+        if s.dims is not None:
+            groups[(s.size, s.dims)].append(s)
+    duplicate_extra_ids = set()
+    for members in groups.values():
+        if len(members) >= 2:
+            members = sorted(members, key=lambda s: (s.mtime, s.name))
+            duplicate_extra_ids.update(id(s) for s in members[1:])
+
+    removed_old = 0
+    removed_duplicates = 0
+    removed_bytes = 0
+    for s in shots:
+        is_old = s.dt.date() < cutoff
+        is_duplicate = id(s) in duplicate_extra_ids
+        if is_old:
+            removed_old += 1
+            removed_bytes += s.size
+        elif is_duplicate:
+            removed_duplicates += 1
+            removed_bytes += s.size
+    removed_count = removed_old + removed_duplicates
+    remaining = len(shots) - removed_count
+    projected_tier, _sentence = verdict_for(remaining, voice=voice)
+    return {
+        "years": plea_years,
+        "cutoff": cutoff,
+        "old_removed": removed_old,
+        "duplicate_removed": removed_duplicates,
+        "removed_count": removed_count,
+        "removed_bytes": removed_bytes,
+        "removed_human": human_bytes(removed_bytes),
+        "remaining_count": remaining,
+        "projected_tier": projected_tier,
+    }
+
+
+def plea_closing(plea: dict, current_tier: str) -> str:
+    projected_rank = TIER_RANKS.get(
+        _normalize_tier_name(plea["projected_tier"]), -1
+    )
+    if projected_rank < tier_rank(current_tier):
+        return "The court would accept this plea."
+    return "The court notes this plea changes nothing. The verdict stands."
+
+
+def render_plea_bargain(plea: dict, current_tier: str) -> str:
+    out = [
+        "THE PLEA BARGAIN",
+        f"  If the defendant deleted {plea['old_removed']:,} screenshots older "
+        f"than {plea['years']} year{'s' if plea['years'] != 1 else ''} and "
+        f"{plea['duplicate_removed']:,} duplicate extras - a purely "
+        f"hypothetical exercise; this court deletes nothing - then:",
+        f"  {'Files removed':<30} {plea['removed_count']:,}",
+        f"  {'Space reclaimed':<30} {plea['removed_human']} "
+        f"({plea['removed_bytes']:,} bytes)",
+        f"  {'Remaining evidence':<30} {plea['remaining_count']:,} screenshots",
+        f"  {'Projected verdict':<30} {plea['projected_tier']}",
+        "",
+        f"  {plea_closing(plea, current_tier)}",
+        "",
+    ]
+    return "\n".join(out)
 
 
 # ---------------------------------------------------------------------------
@@ -950,18 +1087,38 @@ def _evidence_lines(stats: dict) -> list[tuple[str, str]]:
         ("Silent months", f"{stats['silent_months']}"),
         ("Longest daily streak", f"{stats['longest_streak']} days"),
     ]
+    date_filter = stats.get("date_filter") or {}
+    if date_filter.get("since") or date_filter.get("until"):
+        df_since, df_until = date_filter.get("since"), date_filter.get("until")
+        if df_since and df_until:
+            df_value = f"{_fmt_date(df_since)} - {_fmt_date(df_until)}"
+        elif df_since:
+            df_value = f"from {_fmt_date(df_since)}"
+        else:
+            df_value = f"until {_fmt_date(df_until)}"
+        lines.insert(4, ("Date filter", df_value))
     if stats["longest_gap_days"] >= 2:
         lines.append(
             ("Longest clean stretch",
              f"{stats['longest_gap_days']} days "
              f"({_fmt_date(stats['longest_gap_start'])} - {_fmt_date(stats['longest_gap_end'])})")
         )
-    lines += [
-        ("Biggest burst", f"{stats['burst_record']} screenshots in 60 seconds"),
+    lines.append(
+        ("Biggest burst", f"{stats['burst_record']} screenshots in 60 seconds")
+    )
+    window = stats.get("busiest_window")
+    if window and window["count"] >= 3:
+        window_start = window["start"]
+        lines.append(
+            ("Busiest hour window",
+             f"{window['count']} screenshots in the hour from "
+             f"{_fmt_date(window_start)} {window_start:%H:%M}")
+        )
+    lines.append(
         ("Duplicate suspects", f"{stats['duplicate_groups']} "
                                f"group{'s' if stats['duplicate_groups'] != 1 else ''}, "
-                               f"{stats['duplicate_files']} files"),
-    ]
+                               f"{stats['duplicate_files']} files")
+    )
     if stats["duplicate_bytes_wasted"] > 0:
         lines.append(
             ("Duplicate waste", human_bytes(stats["duplicate_bytes_wasted"]))
@@ -1263,7 +1420,10 @@ def render_markdown(stats: dict, tier: str, sentence: str, awards: list[dict],
                     year: int | None = None, voice: str = "fair",
                     versus: dict | None = None,
                     folders: list[dict] | None = None,
-                    vs_year: dict | None = None) -> str:
+                    vs_year: dict | None = None,
+                    plea: dict | None = None,
+                    rematch: dict | None = None,
+                    rematch_requested: bool = False) -> str:
     out = [
         "# Snap Judgment",
         "",
@@ -1296,6 +1456,26 @@ def render_markdown(stats: dict, tier: str, sentence: str, awards: list[dict],
         for y, n in stats["per_year"].items():
             bar = "█" * max(1, round(20 * n / biggest_year)) if n else ""
             out.append(f"  - {y}: {n} {bar}")
+    out += [
+        "",
+        "## Screenshot Heatmap",
+        "",
+        "Rows are weekdays, columns are hours 0-23.",
+        "",
+        "```",
+    ]
+    heat_max = max((max(row) for row in stats["heatmap"]), default=0)
+    shades = " ░▒▓█"
+    for label, row in zip(
+        ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"), stats["heatmap"]
+    ):
+        cells = "".join(
+            shades[0] if value == 0
+            else shades[min(4, max(1, round(4 * value / heat_max)))]
+            for value in row
+        )
+        out.append(f"{label} {cells}")
+    out.append("```")
     if folders and len(folders) > 1:
         out += ["", "## Folders Judged", ""]
         for entry in folders:
@@ -1361,6 +1541,32 @@ def render_markdown(stats: dict, tier: str, sentence: str, awards: list[dict],
             vs_year["closing"],
             "",
         ]
+    if plea is not None:
+        out += [
+            "",
+            "## The Plea Bargain",
+            "",
+            f"If the defendant deleted {plea['old_removed']:,} screenshots "
+            f"older than {plea['years']} "
+            f"year{'s' if plea['years'] != 1 else ''} and "
+            f"{plea['duplicate_removed']:,} duplicate extras - a purely "
+            f"hypothetical exercise; this court deletes nothing - then "
+            f"{plea['removed_count']:,} files would be removed, "
+            f"{plea['removed_human']} ({plea['removed_bytes']:,} bytes) "
+            f"reclaimed, and {plea['remaining_count']:,} screenshots "
+            f"would remain, for a projected verdict of "
+            f"**{plea['projected_tier']}**.",
+            "",
+            plea_closing(plea, tier),
+            "",
+        ]
+    if rematch_requested:
+        out += ["", "## Rematch", ""]
+        if rematch is None:
+            out.append("No prior hearing on record for these folders.")
+        else:
+            out.append(rematch_line(rematch, tier))
+        out.append("")
     return "\n".join(out)
 
 
@@ -1422,6 +1628,21 @@ def build_json(stats: dict, tier: str, sentence: str, awards: list[dict],
             if stats["longest_gap_start"] is not None else None
         ),
         "burst_record": stats["burst_record"],
+        "busiest_window": {
+            "count": stats["busiest_window"]["count"],
+            "start": stats["busiest_window"]["start"].isoformat(),
+        },
+        "heatmap": stats["heatmap"],
+        "date_filter": {
+            "since": (
+                stats["date_filter"]["since"].isoformat()
+                if (stats.get("date_filter") or {}).get("since") else None
+            ),
+            "until": (
+                stats["date_filter"]["until"].isoformat()
+                if (stats.get("date_filter") or {}).get("until") else None
+            ),
+        },
         "duplicate_groups": stats["duplicate_groups"],
         "duplicate_files": stats["duplicate_files"],
         "duplicate_bytes_wasted": stats["duplicate_bytes_wasted"],
@@ -1497,6 +1718,8 @@ def render_card(stats: dict, tier: str, sentence: str, awards: list[dict]) -> st
   li {{ padding: 4px 0; font-size: 14px; }}
   .sentence {{ font-style: italic; color: #cfc9ba; border-top: 1px solid #33333f; padding-top: 14px; }}
   .foot {{ text-align: center; font-size: 11px; color: #6d6878; margin-top: 16px; }}
+  .install {{ text-align: center; font-size: 10px; color: #6d6878; margin-top: 4px;
+             font-family: 'Courier New', monospace; }}
 </style>
 </head>
 <body>
@@ -1518,6 +1741,7 @@ def render_card(stats: dict, tier: str, sentence: str, awards: list[dict]) -> st
     </ul>
     <div class="sentence">{html.escape(sentence)}</div>
     <div class="foot">Judged from file metadata only. Pixels were never read. Snap Judgment, Ghost Developer Studio.</div>
+    <div class="install">pip install snap-judgment</div>
   </div>
 </body>
 </html>
@@ -1558,7 +1782,36 @@ def render_svg(stats: dict, tier: str, sentence: str, awards: list[dict]) -> str
   <text x="600" y="448" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="14" letter-spacing="4" fill="#b08d3c">AWARDS</text>
   <text x="600" y="486" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="25" fill="#e8e3d8">{esc(award_names)}</text>
   <text x="600" y="540" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="20" font-style="italic" fill="#cfc9ba">{esc(sentence)}</text>
-  <text x="600" y="580" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="16" fill="#6d6878">Judged from file metadata only. No pixels were read.</text>
+  <text x="600" y="574" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="16" fill="#6d6878">Judged from file metadata only. No pixels were read.</text>
+  <text x="600" y="598" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="13" letter-spacing="1" fill="#6d6878">pip install snap-judgment</text>
+</svg>
+"""
+
+
+BADGE_TIER_COLORS = {
+    "Innocent Bystander": "#4c1",
+    "Petty Offender": "#97ca00",
+    "Repeat Offender": "#dfb317",
+    "Habitual Hoarder": "#fe7d37",
+    "Felony-Level Archivist": "#e05d44",
+    "Unrepentant Screenshot Felon": "#b60205",
+    "No Evidence": "#9f9f9f",
+}
+
+
+def render_badge(tier: str) -> str:
+    """A shields-style verdict badge: 'snap judgment' on the left, the
+    tier on the right, colored by severity."""
+    esc = _xml_escape
+    left_text = "snap judgment"
+    left_w = int(len(left_text) * 6.5) + 12
+    right_w = int(len(tier) * 6.5) + 12
+    color = BADGE_TIER_COLORS.get(tier, "#9f9f9f")
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{left_w + right_w}" height="20" role="img" aria-label="snap judgment: {esc(tier)}">
+  <rect width="{left_w}" height="20" fill="#555555"/>
+  <rect x="{left_w}" width="{right_w}" height="20" fill="{color}"/>
+  <text x="{left_w / 2:.1f}" y="14" text-anchor="middle" font-family="Verdana, Geneva, sans-serif" font-size="11" fill="#ffffff">{esc(left_text)}</text>
+  <text x="{left_w + right_w / 2:.1f}" y="14" text-anchor="middle" font-family="Verdana, Geneva, sans-serif" font-size="11" fill="#ffffff">{esc(tier)}</text>
 </svg>
 """
 
@@ -1604,6 +1857,29 @@ def render_html_report(stats: dict, tier: str, sentence: str,
     <div class="bars">
 {bars}
     </div>""")
+    heat_max = max((max(row) for row in stats["heatmap"]), default=0)
+    heat_header = "".join(f"<th>{h}</th>" for h in range(24))
+    heat_rows = []
+    for label, row in zip(
+        ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"), stats["heatmap"]
+    ):
+        cells = []
+        for hour, value in enumerate(row):
+            opacity = (0.85 * value / heat_max) if value and heat_max else 0.0
+            cells.append(
+                f'<td style="background:rgba(176,141,60,{opacity:.2f})" '
+                f'title="{label} {hour:02d}:00 - {value}">'
+                f"{value if value else ''}</td>"
+            )
+        heat_rows.append(
+            f"      <tr><th>{label}</th>{''.join(cells)}</tr>"
+        )
+    heat_body = "\n".join(heat_rows)
+    sections.append(f"""    <h2>Screenshot Heatmap</h2>
+    <table class="heat">
+      <tr><th></th>{heat_header}</tr>
+{heat_body}
+    </table>""")
     if stats["count"] >= 5 and stats["exhibits"]:
         items = "\n".join(
             f"        <li><strong>Exhibit {letter}</strong> - "
@@ -1665,6 +1941,10 @@ def render_html_report(stats: dict, tier: str, sentence: str,
   .bar-track {{ flex: 1; background: #1e1e2a; border-radius: 4px; height: 12px; }}
   .bar {{ background: #b08d3c; height: 12px; border-radius: 4px; }}
   .bar-count {{ width: 48px; text-align: right; }}
+  .heat {{ border-collapse: separate; border-spacing: 2px; width: auto; }}
+  .heat th {{ font-size: 9px; color: #9a94a6; padding: 1px; font-weight: normal; }}
+  .heat td {{ width: 20px; height: 16px; text-align: center; font-size: 9px;
+             padding: 1px 0; color: #ffffff; border-radius: 2px; }}
   ul {{ list-style: none; }}
   li {{ padding: 4px 0; font-size: 14px; }}
   .sentence {{ font-style: italic; color: #cfc9ba; border-top: 1px solid #33333f;
@@ -1902,6 +2182,7 @@ def render_png(stats: dict, tier: str, sentence: str,
     canvas.text(600, 566,
                 "Judged from file metadata only. No pixels were read.",
                 2, faint)
+    canvas.text(600, 590, "pip install snap-judgment", 1, faint)
     return canvas.to_png()
 
 
@@ -1992,6 +2273,70 @@ def court_record_line(records: list[dict], primary_folder: str,
     )
 
 
+def build_rematch(records: list[dict], folder_names: list[str],
+                  current_count: int, current_tier: str) -> dict | None:
+    """Compare this hearing against the most recent court record whose
+    folder set matches exactly. None when there is no prior hearing."""
+    match = None
+    for record in records:
+        rec_folders = record.get("folders") or []
+        if sorted(rec_folders) == sorted(folder_names):
+            match = record
+    if match is None:
+        return None
+    try:
+        prev_count = int(match["count"])
+        prev_tier = str(match["verdict"])
+        prev_date = datetime.fromisoformat(match["timestamp"]).date()
+    except Exception:
+        return None
+    prev_rank = TIER_RANKS.get(_normalize_tier_name(prev_tier), -1)
+    cur_rank = TIER_RANKS.get(_normalize_tier_name(current_tier), -1)
+    if cur_rank > prev_rank:
+        change = "worsened"
+    elif cur_rank < prev_rank:
+        change = "improved"
+    else:
+        change = "unchanged"
+    return {
+        "previous_count": prev_count,
+        "delta": current_count - prev_count,
+        "previous_tier": prev_tier,
+        "date": prev_date,
+        "change": change,
+    }
+
+
+def rematch_line(rematch: dict, current_tier: str) -> str:
+    delta = rematch["delta"]
+    delta_text = f"+{delta}" if delta > 0 else f"{delta}"
+    base = (
+        f"Since your last hearing ({_fmt_date(rematch['date'])}): "
+        f"{delta_text} screenshots. "
+    )
+    if rematch["change"] == "worsened":
+        return base + (
+            f"The verdict has worsened from {rematch['previous_tier']} "
+            f"to {current_tier}."
+        )
+    if rematch["change"] == "improved":
+        return base + (
+            f"The verdict has improved from {rematch['previous_tier']} "
+            f"to {current_tier}."
+        )
+    return base + f"The verdict is unchanged: {current_tier}, again."
+
+
+def render_rematch_section(rematch: dict | None, current_tier: str) -> str:
+    out = ["REMATCH"]
+    if rematch is None:
+        out.append("  No prior hearing on record for these folders.")
+    else:
+        out.append(f"  {rematch_line(rematch, current_tier)}")
+    out.append("")
+    return "\n".join(out)
+
+
 def render_history(records: list[dict]) -> str:
     out = ["COURT RECORD - prior hearings", ""]
     for record in records:
@@ -2010,6 +2355,20 @@ def render_history(records: list[dict]) -> str:
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
+def _parse_filter_date(raw: str, flag: str, is_until: bool) -> date:
+    """Parse a --since/--until argument: a full YYYY-MM-DD date, or a
+    bare four-digit year (Jan 1 for --since, Dec 31 for --until).
+    Raises SnapError with a plain message on anything else."""
+    if re.fullmatch(r"\d{4}", raw):
+        return date(int(raw), 12, 31) if is_until else date(int(raw), 1, 1)
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d").date()
+    except ValueError:
+        raise SnapError(
+            f"invalid date for {flag}: {raw!r} (want YYYY-MM-DD)"
+        )
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -2037,10 +2396,29 @@ def build_parser() -> argparse.ArgumentParser:
                         help="write a Markdown report to FILE")
     parser.add_argument("--html", metavar="FILE", dest="html",
                         help="write a full HTML report to FILE")
-    parser.add_argument("--since", metavar="YYYY",
-                        help="only count screenshots from this year onward")
+    parser.add_argument("--since", metavar="YYYY-MM-DD",
+                        help="only count screenshots on or after this date "
+                             "(a bare year, e.g. 2024, also works)")
+    parser.add_argument("--until", metavar="YYYY-MM-DD",
+                        help="only count screenshots on or before this date "
+                             "(a bare year, e.g. 2024, also works)")
     parser.add_argument("--year", metavar="YYYY",
                         help="only count screenshots from this single year")
+    parser.add_argument("--plea-bargain", action="store_true",
+                        dest="plea_bargain",
+                        help="also compute the hypothetical verdict if "
+                             "duplicates and old screenshots were deleted "
+                             "(nothing is actually deleted)")
+    parser.add_argument("--plea-years", metavar="N", dest="plea_years",
+                        type=int, default=2,
+                        help="with --plea-bargain: screenshots older than "
+                             "this many years would go (default: 2)")
+    parser.add_argument("--rematch", action="store_true",
+                        help="compare this hearing against the last court "
+                             "record for the same folders")
+    parser.add_argument("--badge", metavar="FILE",
+                        help="write a shields-style verdict badge (SVG) "
+                             "to FILE")
     parser.add_argument("--vs", metavar="FOLDER", dest="vs",
                         help="also judge FOLDER as a co-defendant and compare")
     parser.add_argument("--vs-year", metavar="YYYY", dest="vs_year",
@@ -2085,10 +2463,28 @@ def main(argv=None) -> int:
         return 0
 
     since_year = None
+    since_date = None
     if args.since is not None:
-        if len(args.since) != 4 or not args.since.isdigit():
-            parser.error("--since must be a four-digit year, e.g. --since 2024")
-        since_year = int(args.since)
+        try:
+            since_date = _parse_filter_date(args.since, "--since", False)
+        except SnapError as exc:
+            print(f"snapjudgment: {exc}", file=sys.stderr)
+            return 2
+
+    until_date = None
+    if args.until is not None:
+        try:
+            until_date = _parse_filter_date(args.until, "--until", True)
+        except SnapError as exc:
+            print(f"snapjudgment: {exc}", file=sys.stderr)
+            return 2
+
+    if args.plea_years < 0:
+        print(
+            "snapjudgment: --plea-years must be 0 or more",
+            file=sys.stderr,
+        )
+        return 2
 
     year = None
     until_year = None
@@ -2197,6 +2593,20 @@ def main(argv=None) -> int:
             recordings = [r for r in recordings if r.dt.year <= until_year]
             vs_shots = [s for s in vs_shots if s.dt.year <= until_year]
             vs_recordings = [r for r in vs_recordings if r.dt.year <= until_year]
+        if since_date is not None:
+            shots = [s for s in shots if s.dt.date() >= since_date]
+            recordings = [r for r in recordings if r.dt.date() >= since_date]
+            vs_shots = [s for s in vs_shots if s.dt.date() >= since_date]
+            vs_recordings = [
+                r for r in vs_recordings if r.dt.date() >= since_date
+            ]
+        if until_date is not None:
+            shots = [s for s in shots if s.dt.date() <= until_date]
+            recordings = [r for r in recordings if r.dt.date() <= until_date]
+            vs_shots = [s for s in vs_shots if s.dt.date() <= until_date]
+            vs_recordings = [
+                r for r in vs_recordings if r.dt.date() <= until_date
+            ]
 
         folder_names = [str(f) for f in folders]
         folder_stats = [
@@ -2253,8 +2663,13 @@ def main(argv=None) -> int:
 
         stats = analyze(shots, recordings)
         stats["skipped"] = skipped_box[0]
+        stats["date_filter"] = {"since": since_date, "until": until_date}
         tier, sentence = verdict_for(stats["count"], voice=voice)
         awards = compute_awards(stats)
+
+        plea = None
+        if args.plea_bargain:
+            plea = compute_plea_bargain(shots, args.plea_years, voice=voice)
 
         versus = None
         vs_stats = None
@@ -2272,10 +2687,16 @@ def main(argv=None) -> int:
                 "worse": worse_offender(stats, vs_stats),
             }
 
+        history_records = read_history()
         court_line = None
         if not args.json and folder_names:
             court_line = court_record_line(
-                read_history(), folder_names[0], stats["count"]
+                history_records, folder_names[0], stats["count"]
+            )
+        rematch = None
+        if args.rematch:
+            rematch = build_rematch(
+                history_records, folder_names, stats["count"], tier
             )
 
         if args.card:
@@ -2290,13 +2711,19 @@ def main(argv=None) -> int:
             Path(args.png).write_bytes(
                 render_png(stats, tier, sentence, awards)
             )
+        if args.badge:
+            Path(args.badge).write_text(
+                render_badge(tier), encoding="utf-8"
+            )
         if args.csv:
             write_csv(args.csv, shots, recordings)
         if args.out:
             Path(args.out).write_text(
                 render_markdown(stats, tier, sentence, awards, year=year,
                                 voice=voice, versus=versus,
-                                folders=folder_stats, vs_year=vs_year),
+                                folders=folder_stats, vs_year=vs_year,
+                                plea=plea, rematch=rematch,
+                                rematch_requested=args.rematch),
                 encoding="utf-8"
             )
         if args.html:
@@ -2365,6 +2792,27 @@ def main(argv=None) -> int:
                         year=vs_year["other_year"], judge=judge_label),
                     "change_pct": vs_year["change_pct"],
                 }
+            if plea is not None:
+                data["plea_bargain"] = {
+                    "years": plea["years"],
+                    "old_removed": plea["old_removed"],
+                    "duplicate_removed": plea["duplicate_removed"],
+                    "removed_count": plea["removed_count"],
+                    "removed_bytes": plea["removed_bytes"],
+                    "removed_human": plea["removed_human"],
+                    "remaining_count": plea["remaining_count"],
+                    "projected_tier": plea["projected_tier"],
+                }
+            if args.rematch:
+                data["rematch"] = (
+                    {
+                        "previous_count": rematch["previous_count"],
+                        "delta": rematch["delta"],
+                        "previous_tier": rematch["previous_tier"],
+                        "date": rematch["date"].isoformat(),
+                    }
+                    if rematch is not None else None
+                )
             print(json.dumps(data, indent=2))
         else:
             if args.oneline:
@@ -2377,6 +2825,12 @@ def main(argv=None) -> int:
                     print(render_comparison(stats, tier, versus))
                 if vs_year is not None:
                     print(render_year_comparison(vs_year))
+                if plea is not None:
+                    print(render_plea_bargain(plea, tier))
+                if args.rematch:
+                    print(render_rematch_section(rematch, tier))
+                if args.badge:
+                    print(args.badge)
                 for kit_path in kit_written:
                     print(kit_path)
             append_history({

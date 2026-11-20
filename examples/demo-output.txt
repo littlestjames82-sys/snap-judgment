@@ -25,6 +25,7 @@ THE EVIDENCE
   Longest daily streak           10 days
   Longest clean stretch          15 days (Jul 3, 2024 - Jul 17, 2024)
   Biggest burst                  12 screenshots in 60 seconds
+  Busiest hour window            12 screenshots in the hour from Aug 14, 2026 21:14
   Duplicate suspects             1 group, 12 files
   Duplicate waste                41.3 KB
   Formats                        PNG 100%

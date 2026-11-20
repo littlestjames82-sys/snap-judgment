@@ -27,13 +27,17 @@ snapjudgment ~/Pictures --svg card.svg   # SVG share card (1200x630)
 snapjudgment ~/Pictures --png card.png   # PNG share card (1200x630), rendered with the stdlib alone
 snapjudgment ~/Pictures --html page.html # full self-contained HTML report
 snapjudgment ~/Downloads --all           # judge every image in the folder
-snapjudgment ~/Pictures --since 2024     # only screenshots from 2024 onward
+snapjudgment ~/Pictures --since 2024-01-01  # only screenshots on or after a date (a bare year works too)
+snapjudgment ~/Pictures --until 2026-06-30  # only screenshots on or before a date
 snapjudgment ~/Pictures --year 2026      # judge one single year only
 snapjudgment ~/Pictures --vs ~/Phone     # co-defendant mode: compare two folders
 snapjudgment ~/Pictures --vs-year 2026   # compare one year against another year in the data
 snapjudgment ~/Pictures --judge strict   # strict | fair | lenient presiding judge
 snapjudgment ~/Pictures --judge-file poet.json  # a custom judge voice from a JSON pack
 snapjudgment ~/Pictures --wrapped-kit ./kit     # year-scoped SVG card + ready-to-post drafts
+snapjudgment ~/Pictures --plea-bargain   # the hypothetical verdict if you deleted the old and the duplicated
+snapjudgment ~/Pictures --rematch        # compare this hearing with the last one on record
+snapjudgment ~/Pictures --badge badge.svg  # a shields-style verdict badge for your README
 snapjudgment ~/Pictures --fail-above "Repeat Offender"  # exit 1 if the verdict ranks above this tier
 snapjudgment ~/Pictures --oneline        # print exactly one summary line
 snapjudgment ~/Pictures --csv files.csv  # per-file records as CSV
@@ -53,10 +57,15 @@ span, busiest day, month and hour, night share, weekend share, evidence
 retention (how much of the collection is over a year old), screenshots per
 day, median per active day, silent months (whole calendar months inside the
 span with zero screenshots), longest daily streak, longest clean stretch,
-biggest 60-second burst, duplicate suspects and the storage they waste, the
-per-format share (PNG, JPG, HEIC...), your busiest screenshot season, your
-screenshot anniversary (the month-day you shoot most, summed across years),
-and the device eras told by your screen resolutions. Files the court cannot
+biggest 60-second burst, the busiest hour window (the fullest rolling 60
+minutes anywhere in the record), duplicate suspects and the storage they
+waste, the per-format share (PNG, JPG, HEIC...), your busiest screenshot
+season, your screenshot anniversary (the month-day you shoot most, summed
+across years), and the device eras told by your screen resolutions. The
+Markdown and HTML reports also draw a screenshot heatmap: the whole
+collection as an hour-by-weekday grid. `--since` and `--until` narrow the
+record to a date range (inclusive, and they compose with `--year`); the
+active filter is entered into the evidence. Files the court cannot
 read (broken symlinks, locked files) are counted and reported, never fatal.
 
 With 5 or more screenshots the report also presents **exhibits**: the five
@@ -105,6 +114,38 @@ pack exits with code 2 and a plain message.
 the data (or, when the target is the most recent year, against the previous
 year present): counts, verdict tiers, night shares, and sizes per year,
 plus a closing line noting improvement, relapse, or no change in behavior.
+
+### The plea bargain
+
+`--plea-bargain` asks what a cleanup would buy you, without touching a
+single file. The court computes the hypothetical outcome if you deleted
+(a) every duplicate suspect except one keeper per exact size-and-dimension
+group, and (b) every screenshot older than `--plea-years N` years
+(default 2), measured from the newest screenshot in the folder: how many
+files would go, how much space would come back, and what verdict the
+remainder would earn. If the projected tier beats the real one, the court
+would accept the plea; if not, it notes for the record that the plea
+changes nothing. It is a projection, labeled as such - Snap Judgment
+never deletes, moves, or modifies anything it judges.
+
+### Rematch
+
+`--rematch` tries this hearing against the last one on record for the
+same folders: the count delta since that hearing and whether the verdict
+has improved, worsened, or held since. With no prior hearing for the
+folders, the court says so. In JSON the comparison rides along as a
+`rematch` object (or `null` when there is nothing to rematch against).
+
+### A badge for your README
+
+`--badge badge.svg` writes a shields-style verdict badge: a dark
+"snap judgment" segment and the tier on a segment colored by severity,
+green for Innocent Bystander through to dark red for Unrepentant
+Screenshot Felon. Post your card, wear your verdict.
+
+The share cards carry the word too: the HTML, SVG, and PNG cards print a
+small `pip install snap-judgment` line under the footer, so anyone who
+sees your verdict knows how to get one of their own.
 
 ### The wrapped kit
 
@@ -156,7 +197,8 @@ can fail the step.
 Every hearing is entered into the **court record** at
 `~/.snap-judgment/history.jsonl`. The next time a folder is judged, the
 verdict reports the last hearing's count and whether the collection is up
-or down since. `snapjudgment --history` prints the full record.
+or down since, and `--rematch` puts the two hearings side by side.
+`snapjudgment --history` prints the full record.
 
 ## The verdicts
 
@@ -180,8 +222,10 @@ or down since. `snapjudgment --history` prints the full record.
 - **Repeat Customer** - 10 or more files are exact size-and-dimension duplicates of a sibling
 - **Creature of Habit** - a quarter or more of your screenshots fall in a single hour of the day
 - **Gigabyte Club** - your screenshots total a gigabyte or more of evidence
-- **Time Traveler** - the collection spans 4 or more years
+- **Time Traveler** - at least one screenshot is dated in the future; the court admits it anyway
+- **The Long Haul** - the collection spans 4 or more years
 - **Lifer** - the collection spans 8 or more years
+- **Ancient Relic** - the oldest screenshot sits 10 or more years before the newest
 - **Anniversary** - one month-day accounts for 15 or more screenshots across the years
 - **Screenshot Streak** - 7 or more consecutive days with at least one screenshot
 - **Clean Stretch** - 30 or more consecutive days without a single screenshot; a recorded moment of restraint
@@ -203,6 +247,7 @@ THE EVIDENCE
   Total screenshots              310
   Total size                     15.1 MB (15,799,537 bytes)
   Taken at night (10 PM-5 AM)    91 (29.4%)
+  Busiest hour window            12 screenshots in the hour from Aug 14, 2026 21:14
   Formats                        PNG 100%
   Screenshot season              Summer (Jun-Aug) - 31.0%
   Screenshot anniversary         Aug 14 - 14 screenshots across 2 years

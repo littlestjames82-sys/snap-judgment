@@ -4,6 +4,39 @@ All notable changes to Snap Judgment are recorded here. Versions are the
 tool's own; the record is the record. Every version below shipped on
 November 19, 2026 - it was that kind of day in court.
 
+## 0.6.0 - 2026-11-19
+
+- `--plea-bargain`: the court hears a plea. It computes the hypothetical
+  outcome if the defendant deleted every duplicate suspect beyond one
+  keeper per group and every screenshot older than `--plea-years N`
+  (default 2, measured from the newest screenshot): files removed, space
+  reclaimed, and the projected verdict, with the court's answer -
+  accepted, or noted as changing nothing. Purely hypothetical; the tool
+  remains read-only and deletes nothing, ever.
+- `--rematch`: this hearing is compared against the most recent court
+  record for the same folders - the count delta since the last hearing
+  and whether the verdict has improved, worsened, or held.
+- Screenshot heatmap: an hour-by-weekday grid of the whole collection,
+  rendered in the Markdown report (shade blocks) and the HTML report
+  (a shaded table), and exposed in JSON as a 7x24 grid.
+- `--since` and `--until` now take full dates (YYYY-MM-DD, inclusive on
+  both ends) and compose with `--year`; a bare year still works, as it
+  did before. The active filter is entered into the evidence.
+- `--badge FILE.svg`: a shields-style verdict badge for READMEs - dark
+  "snap judgment" segment, tier segment colored by severity.
+- New evidence: the busiest hour window, the fullest rolling 60 minutes
+  anywhere in the record (distinct from both the calendar busiest hour
+  and the 60-second burst).
+- Two new awards: Time Traveler (a screenshot dated in the future; the
+  court admits it anyway) and Ancient Relic (the oldest evidence sits
+  ten or more years before the newest). The span award formerly called
+  Time Traveler is renamed The Long Haul - sixteen awards in total.
+- More filename locales judged on sight: French ("Capture d'écran"),
+  Spanish ("Captura de pantalla"), Japanese, and Polish ("Zrzut ekranu").
+- The share cards put the word out: the HTML, SVG, and PNG cards now
+  carry a small "pip install snap-judgment" line under the footer, so a
+  posted verdict tells its viewers how to get judged themselves.
+
 ## 0.5.0 - 2026-11-19
 
 - `--png FILE`: the share card as a real 1200x630 PNG, drawn by a tiny

@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Snap Judgment: Try it in your browser</title>
+<meta name="description" content="Judge your screenshots folder right in your browser. Snap Judgment reads file names, sizes, dates, and header bytes only. Nothing is displayed, uploaded, or stored.">
+<meta property="og:title" content="Snap Judgment: the browser demo">
+<meta property="og:description" content="Pick your screenshots folder and get a courtroom verdict, computed entirely on this page, on your machine.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="assets/demo-card.png">
+<style>
+  :root { --paper:#fdfcf8; --ink:#1d1a16; --muted:#6f6a5e; --line:#d8d2c4; --gold:#8a6d1a; --accent:#b08d3c; --dark:#141210; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:#1a1712; color:var(--ink); font-family: Georgia, 'Times New Roman', serif; }
+  .sheet { max-width: 880px; margin: 0 auto; background: var(--paper); padding: 48px 40px 40px; box-shadow: 0 2px 24px rgba(0,0,0,.5); }
+  header.top { display:flex; justify-content:space-between; align-items:flex-start; border-bottom: 3px double var(--ink); padding-bottom: 14px; }
+  .form-no { font-size: 12px; letter-spacing: .18em; color: var(--muted); text-transform: uppercase; }
+  .stamp { border: 3px solid var(--gold); color: var(--gold); font-weight: bold; letter-spacing: .14em;
+           padding: 6px 12px; transform: rotate(4deg); font-size: 14px; text-transform: uppercase; border-radius: 4px; }
+  h1 { font-size: 40px; line-height: 1.1; margin: 30px 0 6px; }
+  h1 .snap { color: var(--gold); }
+  .sub { color: var(--muted); font-size: 16.5px; line-height: 1.55; max-width: 660px; }
+  p, li { font-size: 16.5px; line-height: 1.6; }
+  .privacy { border: 2px solid var(--gold); border-radius: 8px; padding: 12px 18px; margin: 26px 0; font-size: 16.5px; line-height: 1.6; }
+  .privacy b { color: var(--gold); letter-spacing: .06em; }
+  .judge-wrap { text-align: center; margin: 30px 0 6px; }
+  #judgeBtn { background: var(--ink); color: var(--paper); border: none; cursor: pointer;
+              font-family: Georgia, 'Times New Roman', serif; font-size: 22px; font-weight: bold;
+              letter-spacing: .04em; padding: 18px 42px; border-radius: 999px; }
+  #judgeBtn:hover { background: var(--gold); }
+  #status { text-align: center; color: var(--muted); min-height: 24px; font-size: 15px; margin: 10px 0 0; }
+  .fineprint { text-align: center; color: var(--muted); font-size: 13.5px; margin-top: 8px; }
+  h2.verdict { font-size: 25px; margin: 38px 0 6px; border-bottom: 1px solid var(--line); padding-bottom: 6px;
+               letter-spacing: .14em; text-transform: uppercase; }
+  #verdictTier { font-size: 46px; font-weight: bold; color: var(--gold); margin: 14px 0 4px; line-height: 1.1; }
+  #verdictSummary { font-size: 18px; margin: 0 0 8px; }
+  table.evidence { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 16px; }
+  table.evidence th, table.evidence td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; }
+  table.evidence th { background: #f5f1e6; width: 42%; font-weight: normal; color: var(--muted); }
+  #awardsBox h3 { font-size: 20px; margin: 22px 0 4px; }
+  #awardsBox p { margin: 6px 0; }
+  canvas#card { width: 100%; height: auto; border-radius: 8px; margin: 18px 0 4px; display: block; }
+  .actions { display:flex; gap:10px; flex-wrap:wrap; margin: 14px 0 6px; }
+  .actions button { border: 1.5px solid var(--ink); background: var(--paper); color: var(--ink); cursor: pointer;
+                    font-family: Georgia, 'Times New Roman', serif; padding: 9px 16px; border-radius: 999px; font-size: 15px; }
+  .actions button.primary { background: var(--ink); color: var(--paper); }
+  .notice { border: 2px solid var(--gold); border-radius: 8px; padding: 12px 18px; margin: 26px 0; }
+  .notice b { color: var(--gold); letter-spacing: .06em; }
+  footer { border-top: 3px double var(--ink); margin-top: 40px; padding-top: 14px; color: var(--muted); font-size: 14.5px;
+           display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+  footer a { color: var(--ink); }
+  a { color: var(--ink); }
+  @media (max-width: 640px) { .sheet { padding: 30px 20px; } h1 { font-size: 30px; } #verdictTier { font-size: 34px; } }
+</style>
+</head>
+<body>
+<div class="sheet">
+
+<header class="top">
+  <div>
+    <div class="form-no">Case No. 2026-SNAP &middot; Court of Screenshot Affairs</div>
+    <div class="form-no">Defendant: Your Screenshots Folder</div>
+  </div>
+  <div class="stamp">In Session</div>
+</header>
+
+<h1>The court will now hear <span class="snap">your folder</span>.</h1>
+<p class="sub">This is the live demo of <a href="index.html">Snap Judgment</a>. Pick the folder where your
+screenshots live and the court issues its verdict on the spot: a tier, the headline evidence, and a
+share card you can download. No install, no account, no waiting.</p>
+
+<div class="privacy"><b>HOW THE DEMO READS.</b> The demo reads file names, sizes, dates, and a few header bytes for dimensions. It never displays, uploads, or stores your pictures. Everything happens on this page, on your machine.</div>
+
+<div class="judge-wrap">
+  <button id="judgeBtn" type="button">Judge my folder</button>
+  <p id="status" role="status"></p>
+  <p class="fineprint">Works best in Chrome or Edge, which open a folder picker. In Firefox or Safari the
+  same button opens a folder upload control instead. Same rules, same privacy: the files stay on your machine.</p>
+</div>
+
+<input type="file" id="dirInput" webkitdirectory hidden>
+
+<section id="result" hidden>
+  <h2 class="verdict">The Verdict</h2>
+  <div id="verdictTier"></div>
+  <p id="verdictSummary"></p>
+
+  <table class="evidence">
+    <tbody id="evidenceBody"></tbody>
+  </table>
+
+  <div id="awardsBox"></div>
+
+  <canvas id="card" width="1200" height="630"></canvas>
+  <div class="actions">
+    <button id="downloadCard" class="primary" type="button">Download the card (PNG)</button>
+    <button id="copyVerdict" type="button">Copy my verdict</button>
+  </div>
+  <p class="sub">The full hearing (charges, exhibits, the sentence, 14 awards, plea bargains) needs the
+  tool itself: <code>pip install snap-judgment</code>, or judge another folder above.</p>
+</section>
+
+<section id="noEvidence" hidden>
+  <h2 class="verdict">The Verdict</h2>
+  <div id="verdictTier2" style="font-size:46px;font-weight:bold;color:var(--gold);margin:14px 0 4px;">No Evidence</div>
+  <p>The court found no screenshots in that folder. Make sure you picked the folder that actually holds
+  them: on Windows that is usually <b>Pictures &gt; Screenshots</b>; on a Mac, screenshots often land on the
+  <b>Desktop</b>; on Linux, usually <b>Pictures &gt; Screenshots</b>. The folder itself, or one level of
+  subfolders, is all the court searches. Pick that folder and the court will reconvene.</p>
+  <div class="judge-wrap">
+    <button type="button" onclick="document.getElementById('judgeBtn').click()" style="background:var(--ink);color:var(--paper);border:none;cursor:pointer;font-family:Georgia,'Times New Roman',serif;font-size:18px;font-weight:bold;padding:13px 30px;border-radius:999px;">Pick a different folder</button>
+  </div>
+</section>
+
+<div class="notice"><b>METADATA ONLY.</b> Names, sizes, dates, and image header bytes for width and height. The demo never decodes a pixel, never runs OCR, and has nowhere to send anything even if it wanted to. What your screenshots show is your business; how many there are is the court's.</div>
+
+<footer>
+  <span>Snap Judgment is built by <a href="https://ghostdeveloperstudio.com">Ghost Developer Studio</a>. MIT licensed.</span>
+  <span><a href="index.html">About the tool</a> &middot; <a href="https://github.com/littlestjames82-sys/snap-judgment">GitHub</a> &middot; <a href="https://pypi.org/project/snap-judgment/">PyPI</a></span>
+</footer>
+
+</div>
+<script src="demo.js"></script>
+</body>
+</html>
