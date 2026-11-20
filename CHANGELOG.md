@@ -4,6 +4,24 @@ All notable changes to Snap Judgment are recorded here. Versions are the
 tool's own; the record is the record. Every version below shipped on
 November 19, 2026 - it was that kind of day in court.
 
+## 0.8.0 - 2026-11-19
+
+- `--intensity LEVEL`: the court adds a line of commentary after the
+  sentence, flavored by a roast intensity given as 0-100 or by band
+  name (`gentle`, `kind`, `honest`, `spicy`, `roast`; `full roast`
+  works too). The commentary aims at the defendant's most damning
+  stat: night share of 40% or more first, then a count of 1,000 or
+  more, then 10 or more duplicate extras, then a streak of 14 days or
+  more, then an oldest screenshot 5 years old or more. It appears in
+  the terminal report (a `COMMENTARY:` line), in JSON (a `commentary`
+  key), and in the Markdown and HTML reports; the share cards, badge,
+  CSV, and one-line summary are unchanged. Commentary is opt-in:
+  without the flag every output is exactly as it was in 0.7.0, and the
+  intensity never changes the verdict, the counts, the awards, or the
+  plea math - wording only. It composes with every judge, built-in or
+  loaded from a pack, and can also be set as `intensity` in
+  `.snapjudgment.toml`. Ported from the browser demo's roast slider.
+
 ## 0.7.0 - 2026-11-19
 
 - Configuration file: a `.snapjudgment.toml` in the current directory

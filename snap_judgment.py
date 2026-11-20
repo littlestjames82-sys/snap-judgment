@@ -45,7 +45,7 @@ try:
 except ModuleNotFoundError:  # Python 3.9 and 3.10 have no tomllib
     tomllib = None
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 # ---------------------------------------------------------------------------
 # detection
@@ -855,6 +855,168 @@ def _format_intro(intro: str, tier: str, count: int) -> str:
         return intro
 
 
+# ---------------------------------------------------------------------------
+# roast intensity and court commentary
+# ---------------------------------------------------------------------------
+
+# The roast intensity runs 0-100 in five bands. Intensity is wording
+# only: it flavors the court commentary and never touches the verdict,
+# the counts, the awards, or the plea math. Commentary is opt-in: it
+# appears only when --intensity (or the config key) asks for it.
+INTENSITY_BANDS = ["gentle", "kind", "honest", "spicy", "roast"]
+
+_INTENSITY_NAMES = {
+    "gentle": 0,
+    "kind": 1,
+    "honest": 2,
+    "spicy": 3,
+    "roast": 4,
+    "full roast": 4,
+}
+
+NO_COMMENTARY = (
+    "No evidence, no commentary. The court does not roast an empty folder."
+)
+
+# One template per band (gentle, kind, honest, spicy, roast) for each
+# case the court can comment on. Tokens: {night} night count, {share}
+# night share, {count} total screenshots, {dup} duplicate extras,
+# {streak} longest streak, {age} oldest screenshot's age in years.
+# The roasts are about the habit, never the person. Ported verbatim
+# from the browser demo (docs/demo.js).
+COMMENTARY_TEMPLATES = {
+    "night": [
+        "The court sees {night} screenshots taken at night and simply notes the defendant keeps late hours.",
+        "{night} screenshots after dark, {share}% of the whole folder. The court suspects the defendant's best ideas simply arrive after 10 PM.",
+        "{night} of these screenshots, {share}%, were taken between 10 PM and 5 AM. That is not a habit. That is a second shift.",
+        "{share}% of this folder was captured in the dark, {night} screenshots in total. The court is beginning to think the defendant considers daylight a rumor.",
+        "{night} screenshots after 10 PM. The court has reviewed the defendant's sleep schedule and found it guilty too.",
+    ],
+    "hoard": [
+        "The court counts {count} screenshots and sees a thorough archivist at work. Every one of them meant something once.",
+        "{count} screenshots is a serious collection. The court admires the commitment, even if the filing system is more of a pile.",
+        "{count} screenshots. The court notes the defendant has never once paused to think, perhaps I already have this one.",
+        "{count} screenshots. Somewhere around the halfway mark this stopped being a folder and became a storage unit.",
+        "{count} screenshots. The court would ask the defendant to produce one specific screenshot, but nobody involved has that kind of time. That is rather the point.",
+    ],
+    "dup": [
+        "The court found {dup} screenshots that duplicate a sibling, and chooses to believe the defendant simply wanted to be sure.",
+        "{dup} duplicate extras. The defendant screenshots the way nervous travelers check for their passport, repeatedly and just in case.",
+        "{dup} of these screenshots are exact copies of another screenshot. The same moment, filed twice, for safekeeping.",
+        "{dup} duplicates. The defendant's working theory appears to be that a screenshot does not count until it exists twice.",
+        "{dup} duplicate screenshots. The court has now reviewed the same evidence multiple times, and it was not that compelling the first time.",
+    ],
+    "streak": [
+        "The court notes a {streak}-day streak of screenshots and sees real consistency in it. Some people keep a journal. The defendant keeps screenshots.",
+        "{streak} days in a row with at least one screenshot. The streak itself is impressive. The restraint is harder to find.",
+        "{streak} consecutive days of screenshots. The court has seen shorter relationships, and less committed ones.",
+        "{streak} straight days, not one missed. Whatever appeared on that screen, it never stood a chance of going uncaptured.",
+        "A {streak}-day streak, unbroken. The court hereby promotes screenshotting from habit to lifestyle, effective retroactively.",
+    ],
+    "old": [
+        "The oldest screenshot here is {age} years old, and the court finds something sweet in that. Some things are simply worth keeping.",
+        "A screenshot from {age} years ago still lives in this folder. The court respects a long memory, even a digital one.",
+        "The oldest evidence is {age} years old. The court asks, for the record, if the defendant remembers taking it, or why.",
+        "{age} years old, the senior screenshot in this folder has survived new phones, new updates, and several opportunities to delete it.",
+        "The court presents a screenshot {age} years old. It has been migrated from device to device like a family heirloom, except an heirloom is occasionally looked at.",
+    ],
+    "plain": [
+        "The court has reviewed {count} screenshots and finds a perfectly ordinary folder. The defendant is free to go.",
+        "{count} screenshots, and nothing the court has not seen a hundred times. A respectable, unremarkable collection.",
+        "{count} screenshots. Not a crime scene, not a model of restraint. The court records a shrug and moves on.",
+        "{count} screenshots, and the most notable thing about them is that there are {count} of them. The court expected either far more drama or far less folder.",
+        "{count} screenshots. The court searched this folder for a scandal and found only volume. Even the commentary is disappointed.",
+    ],
+}
+
+
+def intensity_level(value: int) -> int:
+    """Band level (0-4) for a roast intensity value in 0-100."""
+    if value < 20:
+        return 0
+    if value < 40:
+        return 1
+    if value < 60:
+        return 2
+    if value < 80:
+        return 3
+    return 4
+
+
+def parse_intensity(raw) -> int:
+    """Resolve an intensity setting to a band level (0-4).
+
+    Accepts an integer 0-100 or a band name (gentle, kind, honest,
+    spicy, roast; "full roast" also maps to roast), case-insensitively.
+    Raises SnapError on anything else.
+    """
+    complaint = (
+        f"invalid intensity: {raw!r}; use 0-100 or one of: "
+        "gentle, kind, honest, spicy, roast"
+    )
+    if isinstance(raw, bool):
+        raise SnapError(complaint)
+    if isinstance(raw, int):
+        value = raw
+    elif isinstance(raw, str):
+        name = re.sub(r"[\s\-]+", " ", raw.strip().lower())
+        if name in _INTENSITY_NAMES:
+            return _INTENSITY_NAMES[name]
+        try:
+            value = int(raw.strip())
+        except ValueError:
+            raise SnapError(complaint) from None
+    else:
+        raise SnapError(complaint)
+    if not 0 <= value <= 100:
+        raise SnapError(complaint)
+    return intensity_level(value)
+
+
+def _oldest_age_years(stats: dict, now: datetime) -> int:
+    """Age of the oldest screenshot in whole years, on the same basis
+    as The Archivist award: days since the oldest screenshot, with a
+    year counted as 365 days."""
+    return max(0, (now - stats["oldest_dt"]).days // 365)
+
+
+def court_commentary(stats: dict, level: int,
+                     now: datetime | None = None) -> str:
+    """The court's commentary on a hearing: one line, flavored by the
+    roast intensity band (level 0-4), aimed at the defendant's most
+    damning stat. Priority: night share of 40% or more, then a count
+    of 1,000 or more, then 10 or more duplicate extras, then a streak
+    of 14 days or more, then an oldest screenshot 5 years old or
+    more, then the plain count. Pure: reads stats, never writes."""
+    if not stats or not stats.get("count"):
+        return NO_COMMENTARY
+    now = now or datetime.now()
+    level = max(0, min(4, int(level)))
+    dup_extras = stats["duplicate_files"] - stats["duplicate_groups"]
+    age = _oldest_age_years(stats, now)
+    values = {
+        "night": stats["night_count"],
+        "share": f"{stats['night_share']:.1f}",
+        "count": f"{stats['count']:,}",
+        "dup": dup_extras,
+        "streak": stats["longest_streak"],
+        "age": age,
+    }
+    if stats["night_share"] >= 40:
+        key = "night"
+    elif stats["count"] >= 1000:
+        key = "hoard"
+    elif dup_extras >= 10:
+        key = "dup"
+    elif stats["longest_streak"] >= 14:
+        key = "streak"
+    elif age >= 5:
+        key = "old"
+    else:
+        key = "plain"
+    return COMMENTARY_TEMPLATES[key][level].format(**values)
+
+
 def compute_awards(stats: dict, now: datetime | None = None) -> list[dict]:
     now = now or datetime.now()
     awards = []
@@ -1160,7 +1322,8 @@ def _evidence_lines(stats: dict) -> list[tuple[str, str]]:
 def render_report(stats: dict, tier: str, sentence: str, awards: list[dict],
                   year: int | None = None, voice: str = "fair",
                   court_record: str | None = None,
-                  folders: list[dict] | None = None) -> str:
+                  folders: list[dict] | None = None,
+                  commentary: str | None = None) -> str:
     out = [
         "=" * 62,
         "SNAP JUDGMENT - The Court of Screenshot Affairs",
@@ -1228,7 +1391,10 @@ def render_report(stats: dict, tier: str, sentence: str, awards: list[dict],
         out.append(
             f"  {framing[1] if framing else 'None. The court is as surprised as you are.'}"
         )
-    out += ["", "THE SENTENCE", f"  {sentence}", ""]
+    out += ["", "THE SENTENCE", f"  {sentence}"]
+    if commentary is not None:
+        out.append(f"  COMMENTARY: {commentary}")
+    out.append("")
     return "\n".join(out)
 
 
@@ -1428,7 +1594,8 @@ def render_markdown(stats: dict, tier: str, sentence: str, awards: list[dict],
                     vs_year: dict | None = None,
                     plea: dict | None = None,
                     rematch: dict | None = None,
-                    rematch_requested: bool = False) -> str:
+                    rematch_requested: bool = False,
+                    commentary: str | None = None) -> str:
     out = [
         "# Snap Judgment",
         "",
@@ -1512,6 +1679,8 @@ def render_markdown(stats: dict, tier: str, sentence: str, awards: list[dict],
             framing[1] if framing else "None. The court is as surprised as you are."
         )
     out += ["", "## The Sentence", "", sentence, ""]
+    if commentary is not None:
+        out += ["## Court Commentary", "", commentary, ""]
     if versus is not None:
         vs_stats, vs_tier = versus["stats"], versus["tier"]
         out += [
@@ -1577,8 +1746,9 @@ def render_markdown(stats: dict, tier: str, sentence: str, awards: list[dict],
 
 def build_json(stats: dict, tier: str, sentence: str, awards: list[dict],
                folders: list[dict], year: int | None = None,
-               judge: str = "fair") -> dict:
-    return {
+               judge: str = "fair",
+               commentary: str | None = None) -> dict:
+    data = {
         "version": __version__,
         "folders": folders,
         "verdict": tier,
@@ -1673,6 +1843,9 @@ def build_json(stats: dict, tier: str, sentence: str, awards: list[dict],
         ],
         "awards": awards,
     }
+    if commentary is not None:
+        data["commentary"] = commentary
+    return data
 
 
 def render_card(stats: dict, tier: str, sentence: str, awards: list[dict]) -> str:
@@ -1823,7 +1996,8 @@ def render_badge(tier: str) -> str:
 
 def render_html_report(stats: dict, tier: str, sentence: str,
                        awards: list[dict], year: int | None = None,
-                       voice: str = "fair") -> str:
+                       voice: str = "fair",
+                       commentary: str | None = None) -> str:
     """A full self-contained HTML report: verdict, evidence table,
     per-year bars, exhibits, charges, awards, sentence. Inline CSS only."""
     esc = html.escape
@@ -1918,6 +2092,12 @@ def render_html_report(stats: dict, tier: str, sentence: str,
 {items}
     </ul>""")
     body = "\n".join(sections)
+    commentary_html = ""
+    if commentary is not None:
+        commentary_html = (
+            f'\n    <h2>Court Commentary</h2>'
+            f'\n    <p>{esc(commentary)}</p>'
+        )
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1965,7 +2145,7 @@ def render_html_report(stats: dict, tier: str, sentence: str,
     <div class="summary">{stats['count']:,} screenshots, {esc(stats['total_human'])} of evidence,
       spanning {_fmt_date(stats['first_date'])} to {_fmt_date(stats['last_date'])}.</div>
 {body}
-    <div class="sentence">{esc(sentence)}</div>
+    <div class="sentence">{esc(sentence)}</div>{commentary_html}
     <div class="foot">Judged from file metadata only. Pixels were never read. Snap Judgment, Ghost Developer Studio.</div>
   </div>
 </body>
@@ -2536,10 +2716,10 @@ def load_config(folder_args, validate_judge_file=True):
     """The validated contents of the config file in force, as a dict.
 
     A config file that cannot be parsed, names an unknown judge or
-    fail-above tier, or points at a judge pack that does not load is
-    warned about and ignored as a whole: a config file must never
-    break a run. Individual keys with values of the wrong type are
-    skipped later, when applied.
+    fail-above tier, carries an invalid intensity, or points at a
+    judge pack that does not load is warned about and ignored as a
+    whole: a config file must never break a run. Individual keys with
+    values of the wrong type are skipped later, when applied.
     """
     path = find_config_path(folder_args)
     if path is None:
@@ -2552,6 +2732,13 @@ def load_config(folder_args, validate_judge_file=True):
     if judge is not None and judge not in VOICES:
         _config_warning(path, f"unknown judge: {judge!r}")
         return {}
+    intensity = data.get("intensity")
+    if intensity is not None:
+        try:
+            parse_intensity(intensity)
+        except SnapError:
+            _config_warning(path, f"invalid intensity: {intensity!r}")
+            return {}
     fail_above = data.get("fail_above")
     if fail_above is not None and (
         not isinstance(fail_above, str)
@@ -2590,7 +2777,7 @@ def apply_config(args, explicit):
 
     Command-line flags always win; the config only supplies values for
     options that were not typed. Supported keys: folders, judge,
-    judge_file, plea_years, fail_above, all.
+    judge_file, plea_years, fail_above, all, intensity.
     """
     data = load_config(
         args.folders, validate_judge_file="judge_file" not in explicit
@@ -2620,6 +2807,8 @@ def apply_config(args, explicit):
         args.fail_above = data["fail_above"]
     if "all" not in explicit and isinstance(data.get("all"), bool):
         args.all = data["all"]
+    if "intensity" not in explicit and "intensity" in data:
+        args.intensity = data["intensity"]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -2686,6 +2875,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="the presiding judge's voice (default: fair)")
     parser.add_argument("--judge-file", metavar="FILE", dest="judge_file",
                         help="load a custom judge voice from a JSON pack")
+    parser.add_argument("--intensity", metavar="LEVEL", default=None,
+                        help="Roast intensity for the court's commentary: "
+                             "0-100 or gentle|kind|honest|spicy|roast. "
+                             "Wording only; the verdict math never changes.")
     parser.add_argument("--oneline", action="store_true",
                         help="print exactly one summary line "
                              "(ignored when --json is given)")
@@ -2740,6 +2933,14 @@ def main(argv=None) -> int:
             file=sys.stderr,
         )
         return 2
+
+    intensity = None
+    if args.intensity is not None:
+        try:
+            intensity = parse_intensity(args.intensity)
+        except SnapError as exc:
+            print(f"snapjudgment: {exc}", file=sys.stderr)
+            return 2
 
     year = None
     until_year = None
@@ -2883,7 +3084,7 @@ def main(argv=None) -> int:
                 )
                 return 2
             if args.json:
-                print(json.dumps({
+                empty_data = {
                     "version": __version__,
                     "folders": [
                         {"path": name, "count": 0} for name in folder_names
@@ -2895,12 +3096,22 @@ def main(argv=None) -> int:
                     "recordings": len(recordings),
                     "skipped": skipped_box[0],
                     "awards": [],
-                }, indent=2))
+                }
+                if intensity is not None:
+                    empty_data["commentary"] = court_commentary(
+                        {}, intensity
+                    )
+                print(json.dumps(empty_data, indent=2))
             else:
                 if args.oneline:
                     print("No Evidence · 0 screenshots")
                 else:
                     print(render_no_evidence())
+                    if intensity is not None:
+                        print(
+                            "  COMMENTARY: "
+                            + court_commentary({}, intensity)
+                        )
                 append_history({
                     "timestamp": datetime.now().isoformat(timespec="seconds"),
                     "folders": folder_names,
@@ -2921,6 +3132,9 @@ def main(argv=None) -> int:
         stats["date_filter"] = {"since": since_date, "until": until_date}
         tier, sentence = verdict_for(stats["count"], voice=voice)
         awards = compute_awards(stats)
+        commentary = None
+        if intensity is not None:
+            commentary = court_commentary(stats, intensity)
 
         plea = None
         if args.plea_bargain:
@@ -2978,13 +3192,14 @@ def main(argv=None) -> int:
                                 voice=voice, versus=versus,
                                 folders=folder_stats, vs_year=vs_year,
                                 plea=plea, rematch=rematch,
-                                rematch_requested=args.rematch),
+                                rematch_requested=args.rematch,
+                                commentary=commentary),
                 encoding="utf-8"
             )
         if args.html:
             Path(args.html).write_text(
                 render_html_report(stats, tier, sentence, awards, year=year,
-                                   voice=voice),
+                                   voice=voice, commentary=commentary),
                 encoding="utf-8"
             )
         kit_written = []
@@ -3003,7 +3218,8 @@ def main(argv=None) -> int:
 
         if args.json:
             data = build_json(stats, tier, sentence, awards, folder_stats,
-                              year=year, judge=judge_label)
+                              year=year, judge=judge_label,
+                              commentary=commentary)
             if versus is not None:
                 data["versus"] = {
                     "main": build_json(stats, tier, sentence, awards,
@@ -3075,7 +3291,8 @@ def main(argv=None) -> int:
             else:
                 print(render_report(stats, tier, sentence, awards, year=year,
                                     voice=voice, court_record=court_line,
-                                    folders=folder_stats))
+                                    folders=folder_stats,
+                                    commentary=commentary))
                 if versus is not None:
                     print(render_comparison(stats, tier, versus))
                 if vs_year is not None:

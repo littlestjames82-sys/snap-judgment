@@ -34,6 +34,7 @@ snapjudgment ~/Pictures --vs ~/Phone     # co-defendant mode: compare two folder
 snapjudgment ~/Pictures --vs-year 2026   # compare one year against another year in the data
 snapjudgment ~/Pictures --judge strict   # strict | fair | lenient presiding judge
 snapjudgment ~/Pictures --judge-file poet.json  # a custom judge voice from a JSON pack
+snapjudgment ~/Pictures --intensity roast  # court commentary at full roast (0-100 or gentle|kind|honest|spicy|roast)
 snapjudgment ~/Pictures --wrapped-kit ./kit     # year-scoped SVG card + ready-to-post drafts
 snapjudgment ~/Pictures --plea-bargain   # the hypothetical verdict if you deleted the old and the duplicated
 snapjudgment ~/Pictures --rematch        # compare this hearing with the last one on record
@@ -86,6 +87,17 @@ judge (The Hanging Judge) words the same verdict severely, and the
 encouragement instead of a sentence. The voice changes the wording only,
 never the math.
 
+Add `--intensity` and the court appends a line of commentary after the
+sentence, aimed at your most damning stat: night share first, then sheer
+count, duplicate extras, your longest streak, the oldest evidence. The
+intensity runs 0-100 or by name: gentle, kind, honest, spicy, roast. At
+gentle the court simply notes that the defendant keeps late hours; at
+full roast it finds the sleep schedule guilty too. Commentary is opt-in,
+appears in the terminal report, JSON, and the Markdown and HTML reports,
+and composes with any judge. Like the judge's voice, it changes the
+wording only, never the math. It can also live in the config file as
+`intensity`.
+
 ### Custom judge packs
 
 `--judge-file FILE.json` seats a judge of your own. A pack is a JSON object:
@@ -127,8 +139,9 @@ all = false
 The supported keys are `folders` (a list of paths, used when no folder
 argument is given), `judge` (`strict` | `fair` | `lenient`),
 `judge_file` (a custom judge pack, as with `--judge-file`),
-`plea_years` (an integer), `fail_above` (a verdict tier name), and
-`all` (a boolean). Python 3.11+ parses the file with `tomllib`; on
+`plea_years` (an integer), `fail_above` (a verdict tier name),
+`all` (a boolean), and `intensity` (an integer 0-100 or a band name,
+as with `--intensity`). Python 3.11+ parses the file with `tomllib`; on
 3.9/3.10 a small built-in parser reads the same flat subset of TOML
 (top-level `key = value` lines). A config file that cannot be parsed,
 names an unknown judge or tier, or points at a judge pack that does not

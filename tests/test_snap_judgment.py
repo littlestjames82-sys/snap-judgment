@@ -2916,6 +2916,322 @@ class FlatTomlTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# roast intensity and court commentary (v0.8.0)
+# ---------------------------------------------------------------------------
+
+class IntensityTests(TempDirCase):
+    GENTLE_NIGHT = (
+        "The court sees 6 screenshots taken at night and simply notes "
+        "the defendant keeps late hours."
+    )
+    ROAST_NIGHT = (
+        "6 screenshots after 10 PM. The court has reviewed the "
+        "defendant's sleep schedule and found it guilty too."
+    )
+
+    def setUp(self):
+        super().setUp()
+        self._old_cwd = os.getcwd()
+        self.work = self.root / "work"  # stands in for the current directory
+        self.work.mkdir()
+        os.chdir(self.work)
+
+    def tearDown(self):
+        os.chdir(self._old_cwd)
+        super().tearDown()
+
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = sj.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def seed_night(self, night=6, day=4):
+        """A night-heavy folder: night share 60%, nothing else notable."""
+        base = datetime(2026, 6, 1)
+        for i in range(night):
+            write_file(self.root, f"screenshot_night_{i}.png",
+                       make_png(100, 100),
+                       base.replace(hour=23) + timedelta(days=i))
+        for i in range(day):
+            write_file(self.root, f"screenshot_day_{i}.png",
+                       make_png(100, 100),
+                       base.replace(hour=12) + timedelta(days=i))
+
+    def write_config(self, text):
+        (self.work / ".snapjudgment.toml").write_text(
+            text, encoding="utf-8"
+        )
+
+    # -- band parsing ------------------------------------------------
+
+    def test_band_boundaries(self):
+        cases = {0: 0, 19: 0, 20: 1, 39: 1, 40: 2, 59: 2,
+                 60: 3, 79: 3, 80: 4, 100: 4}
+        for value, level in cases.items():
+            self.assertEqual(sj.parse_intensity(value), level)
+            self.assertEqual(sj.parse_intensity(str(value)), level)
+
+    def test_band_names_case_insensitive(self):
+        self.assertEqual(sj.parse_intensity("gentle"), 0)
+        self.assertEqual(sj.parse_intensity("Kind"), 1)
+        self.assertEqual(sj.parse_intensity("HONEST"), 2)
+        self.assertEqual(sj.parse_intensity(" spicy "), 3)
+        self.assertEqual(sj.parse_intensity("roast"), 4)
+        self.assertEqual(sj.parse_intensity("full roast"), 4)
+        self.assertEqual(sj.parse_intensity("Full-Roast"), 4)
+
+    def test_parse_intensity_invalid(self):
+        for raw in ("banana", "mild", "", "50.5", "101", "-1", 101, -1,
+                    True):
+            with self.assertRaises(sj.SnapError):
+                sj.parse_intensity(raw)
+
+    def test_intensity_flag_invalid_exits_2(self):
+        self.seed_night()
+        code, out, err = self.run_main(
+            [str(self.root), "--intensity", "banana"]
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("invalid intensity", err)
+        self.assertEqual(len(err.strip().splitlines()), 1)
+
+    # -- opt-in only ---------------------------------------------------
+
+    def test_commentary_absent_by_default_terminal(self):
+        self.seed_night()
+        code, out, _ = self.run_main([str(self.root)])
+        self.assertEqual(code, 0)
+        self.assertNotIn("COMMENTARY", out)
+
+    def test_commentary_absent_by_default_json(self):
+        self.seed_night()
+        code, out, _ = self.run_main([str(self.root), "--json"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("commentary", json.loads(out))
+
+    def test_cards_and_oneline_unchanged_by_intensity(self):
+        self.seed_night()
+        plain_card = self.root / "plain.html"
+        roast_card = self.root / "roast.html"
+        code, _, _ = self.run_main([str(self.root), "--card", str(plain_card)])
+        self.assertEqual(code, 0)
+        code, _, _ = self.run_main(
+            [str(self.root), "--card", str(roast_card),
+             "--intensity", "roast"]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(plain_card.read_bytes(), roast_card.read_bytes())
+        _, plain_line, _ = self.run_main([str(self.root), "--oneline"])
+        _, roast_line, _ = self.run_main(
+            [str(self.root), "--oneline", "--intensity", "roast"]
+        )
+        self.assertEqual(plain_line, roast_line)
+
+    # -- presence and placement ----------------------------------------
+
+    def test_commentary_terminal_after_sentence(self):
+        self.seed_night()
+        code, out, _ = self.run_main(
+            [str(self.root), "--intensity", "roast"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn(f"COMMENTARY: {self.ROAST_NIGHT}", out)
+        self.assertLess(out.index("THE SENTENCE"),
+                        out.index("COMMENTARY:"))
+
+    def test_commentary_json(self):
+        self.seed_night()
+        code, out, _ = self.run_main(
+            [str(self.root), "--json", "--intensity", "roast"]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["commentary"], self.ROAST_NIGHT)
+
+    def test_commentary_markdown(self):
+        self.seed_night()
+        report = self.root / "report.md"
+        code, _, _ = self.run_main(
+            [str(self.root), "--out", str(report), "--intensity", "roast"]
+        )
+        self.assertEqual(code, 0)
+        text = report.read_text(encoding="utf-8")
+        self.assertIn("## Court Commentary", text)
+        self.assertIn(self.ROAST_NIGHT, text)
+        self.assertLess(text.index("## The Sentence"),
+                        text.index("## Court Commentary"))
+
+    def test_commentary_html_report(self):
+        self.seed_night()
+        page = self.root / "report.html"
+        code, _, _ = self.run_main(
+            [str(self.root), "--html", str(page), "--intensity", "roast"]
+        )
+        self.assertEqual(code, 0)
+        text = page.read_text(encoding="utf-8")
+        self.assertIn("Court Commentary", text)
+        self.assertIn(sj.html.escape(self.ROAST_NIGHT), text)
+
+    # -- content ---------------------------------------------------------
+
+    def test_gentle_and_roast_differ_on_same_folder(self):
+        self.seed_night()
+        _, gentle_out, _ = self.run_main(
+            [str(self.root), "--json", "--intensity", "gentle"]
+        )
+        _, roast_out, _ = self.run_main(
+            [str(self.root), "--json", "--intensity", "roast"]
+        )
+        gentle = json.loads(gentle_out)["commentary"]
+        roast = json.loads(roast_out)["commentary"]
+        self.assertEqual(gentle, self.GENTLE_NIGHT)  # real night count: 6
+        self.assertEqual(roast, self.ROAST_NIGHT)
+        self.assertNotEqual(gentle, roast)
+
+    def test_priority_night_beats_duplicates(self):
+        # 12 identical files (11 duplicate extras) but 7 of 12 at night:
+        # the night case wins the commentary.
+        base = datetime(2026, 6, 1)
+        for i in range(12):
+            hour = 23 if i < 7 else 12
+            write_file(self.root, f"screenshot_{i:02d}.png",
+                       make_png(100, 100),
+                       base.replace(hour=hour) + timedelta(days=i))
+        code, out, _ = self.run_main(
+            [str(self.root), "--json", "--intensity", "roast"]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            json.loads(out)["commentary"],
+            "7 screenshots after 10 PM. The court has reviewed the "
+            "defendant's sleep schedule and found it guilty too.",
+        )
+
+    def test_priority_hoard_beats_duplicates(self):
+        stats = {
+            "count": 1500, "night_count": 10, "night_share": 10.0,
+            "duplicate_files": 30, "duplicate_groups": 5,
+            "longest_streak": 3, "oldest_dt": datetime(2026, 6, 1),
+        }
+        line = sj.court_commentary(stats, 4, now=datetime(2026, 6, 2))
+        self.assertEqual(
+            line,
+            "1,500 screenshots. The court would ask the defendant to "
+            "produce one specific screenshot, but nobody involved has "
+            "that kind of time. That is rather the point.",
+        )
+
+    def test_oldest_case_uses_archivist_age_basis(self):
+        now = datetime(2026, 1, 1)
+        stats = {
+            "count": 100, "night_count": 0, "night_share": 0.0,
+            "duplicate_files": 0, "duplicate_groups": 0,
+            "longest_streak": 3,
+            "oldest_dt": now - timedelta(days=6 * 365),
+        }
+        line = sj.court_commentary(stats, 0, now=now)
+        self.assertEqual(
+            line,
+            "The oldest screenshot here is 6 years old, and the court "
+            "finds something sweet in that. Some things are simply "
+            "worth keeping.",
+        )
+
+    def test_no_evidence_commentary_line(self):
+        self.assertEqual(sj.court_commentary({}, 4), sj.NO_COMMENTARY)
+        self.assertEqual(
+            sj.court_commentary({"count": 0}, 0),
+            "No evidence, no commentary. The court does not roast an "
+            "empty folder.",
+        )
+
+    def test_no_evidence_cli_with_intensity(self):
+        empty = self.root / "empty"
+        empty.mkdir()
+        code, out, _ = self.run_main(
+            [str(empty), "--json", "--intensity", "roast"]
+        )
+        self.assertEqual(code, 2)
+        self.assertEqual(json.loads(out)["commentary"], sj.NO_COMMENTARY)
+        code, out, _ = self.run_main([str(empty), "--intensity", "roast"])
+        self.assertEqual(code, 2)
+        self.assertIn(f"COMMENTARY: {sj.NO_COMMENTARY}", out)
+
+    # -- config file -----------------------------------------------------
+
+    def test_config_intensity_applies(self):
+        self.seed_night()
+        self.write_config('intensity = "roast"\n')
+        code, out, _ = self.run_main([str(self.root), "--json"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["commentary"], self.ROAST_NIGHT)
+
+    def test_config_intensity_cli_overrides(self):
+        self.seed_night()
+        self.write_config("intensity = 90\n")  # roast, as an integer
+        code, out, _ = self.run_main(
+            [str(self.root), "--json", "--intensity", "gentle"]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["commentary"], self.GENTLE_NIGHT)
+
+    def test_config_intensity_malformed_warns_and_is_ignored(self):
+        self.seed_night()
+        self.write_config('intensity = "lava"\n')
+        code, out, err = self.run_main([str(self.root), "--json"])
+        self.assertEqual(code, 0)
+        self.assertIn("warning", err)
+        self.assertNotIn("commentary", json.loads(out))
+
+    # -- composition -----------------------------------------------------
+
+    def test_intensity_with_strict_judge(self):
+        self.seed_night()
+        code, out, _ = self.run_main(
+            [str(self.root), "--judge", "strict", "--intensity", "roast"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("Presiding: The Hanging Judge", out)
+        self.assertIn(
+            "Sentence: none. This time. The court will be watching "
+            "the folder.", out,
+        )
+        self.assertIn(f"COMMENTARY: {self.ROAST_NIGHT}", out)
+
+    def test_intensity_with_judge_pack(self):
+        self.seed_night()
+        pack = self.root / "pack.json"
+        pack.write_text(
+            json.dumps({"name": "The Test Judge", "sentences": {}}),
+            encoding="utf-8",
+        )
+        code, out, _ = self.run_main(
+            [str(self.root), "--json", "--judge-file", str(pack),
+             "--intensity", "gentle"]
+        )
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual(data["judge"], "The Test Judge")
+        self.assertEqual(data["commentary"], self.GENTLE_NIGHT)
+
+    def test_fail_above_unchanged_with_intensity(self):
+        for i in range(60):  # Petty Offender
+            write_file(self.root, f"screenshot_{i:02d}.png",
+                       make_png(100, 100),
+                       datetime(2026, 6, 1, 12, 0) + timedelta(days=i))
+        code, _, _ = self.run_main(
+            [str(self.root), "--intensity", "roast",
+             "--fail-above", "Innocent Bystander"]
+        )
+        self.assertEqual(code, 1)
+        code, _, _ = self.run_main(
+            [str(self.root), "--intensity", "roast",
+             "--fail-above", "Habitual Hoarder"]
+        )
+        self.assertEqual(code, 0)
+
+
+# ---------------------------------------------------------------------------
 # shell completions (v0.7.0)
 # ---------------------------------------------------------------------------
 

@@ -26,6 +26,7 @@ _snapjudgment() {
         '--fail-above=[exit 1 when the verdict ranks above this tier]:tier:("Innocent Bystander" "Petty Offender" "Repeat Offender" "Habitual Hoarder" "Felony-Level Archivist" "Unrepentant Screenshot Felon")' \
         '--judge=[the presiding judge voice]:judge:(strict fair lenient)' \
         '--judge-file=[load a custom judge voice from a JSON pack]:file:_files' \
+        '--intensity=[roast intensity for the court commentary (0-100 or a band name)]:intensity:(gentle kind honest spicy roast)' \
         '--oneline[print exactly one summary line (ignored when --json is given)]' \
         '--csv=[write per-file records to FILE as CSV]:file:_files' \
         '--history[print the court record (prior hearings) and exit]' \

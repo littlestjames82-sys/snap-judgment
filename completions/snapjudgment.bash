@@ -11,11 +11,15 @@ _snapjudgment() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    local opts="--all --json --card --svg --png --out --html --since --until --year --plea-bargain --plea-years --rematch --badge --vs --vs-year --wrapped-kit --fail-above --judge --judge-file --oneline --csv --history --version --help"
+    local opts="--all --json --card --svg --png --out --html --since --until --year --plea-bargain --plea-years --rematch --badge --vs --vs-year --wrapped-kit --fail-above --judge --judge-file --intensity --oneline --csv --history --version --help"
 
     case "$prev" in
         --judge)
             COMPREPLY=( $(compgen -W "strict fair lenient" -- "$cur") )
+            return 0
+            ;;
+        --intensity)
+            COMPREPLY=( $(compgen -W "gentle kind honest spicy roast" -- "$cur") )
             return 0
             ;;
         --fail-above)
