@@ -50,13 +50,19 @@
   table.evidence { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 16px; }
   table.evidence th, table.evidence td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; }
   table.evidence th { background: #f5f1e6; width: 42%; font-weight: normal; color: var(--muted); }
-  #awardsBox h3, #exhibitsBox h3, #heatmapBox h3, #pleaBox h3 { font-size: 20px; margin: 22px 0 4px; }
+  #awardsBox h3, #exhibitsBox h3, #heatmapBox h3, #pleaBox h3, #commentaryBox h3 { font-size: 20px; margin: 22px 0 4px; }
+  #commentaryLine { font-size: 17.5px; font-style: italic; margin: 6px 0 2px; }
   #awardsBox p, #exhibitsBox p { margin: 6px 0; }
   .judge-bar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin: 30px 0 0; }
   .judge-bar .judge-label { color: var(--muted); font-size: 14px; letter-spacing: .12em; text-transform: uppercase; margin-right: 4px; }
   .judge-btn { border: 1.5px solid var(--ink); background: var(--paper); color: var(--ink); cursor: pointer;
                font-family: Georgia, 'Times New Roman', serif; padding: 7px 15px; border-radius: 999px; font-size: 14.5px; }
   .judge-btn.active { background: var(--ink); color: var(--paper); }
+  .roast-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin: 12px 0 0; }
+  .roast-bar .judge-label { color: var(--muted); font-size: 14px; letter-spacing: .12em; text-transform: uppercase; margin-right: 4px; }
+  .roast-bar input[type="range"] { flex: 1 1 200px; max-width: 400px; accent-color: var(--gold); }
+  #roastBand { font-weight: bold; color: var(--gold); font-size: 15.5px; }
+  .roast-note { color: var(--muted); font-size: 14.5px; font-style: italic; margin: 8px 0 0; }
   #judgeName { font-size: 15px; color: var(--muted); font-style: italic; margin: 10px 0 0; }
   #sentenceLine { font-size: 19px; font-style: italic; margin: 10px 0 4px; }
   .heatmap-note { color: var(--muted); font-size: 14px; margin: 2px 0 8px; }
@@ -120,20 +126,32 @@ share card you can download. No install, no account, no waiting.</p>
   <div class="drop-inner">Drop the folder.<br>The court is ready.</div>
 </div>
 
+<div class="judge-bar" role="group" aria-label="Presiding judge">
+  <span class="judge-label">Presiding judge</span>
+  <button type="button" class="judge-btn" data-voice="strict">Strict</button>
+  <button type="button" class="judge-btn active" data-voice="fair">Fair</button>
+  <button type="button" class="judge-btn" data-voice="lenient">Lenient</button>
+</div>
+<div class="roast-bar">
+  <label class="judge-label" for="roastRange">Roast intensity</label>
+  <input type="range" id="roastRange" min="0" max="100" step="1" value="50" aria-label="Roast intensity">
+  <span id="roastBand">Honest</span>
+</div>
+<p class="roast-note">Pick a judge, then set how hard the court leans in. The math never changes. Only the mercy does.</p>
+
 <section id="result" hidden>
   <p id="sampleBanner" class="sample-banner" hidden><b>SAMPLE DEFENDANT.</b> Sample defendant (synthetic folder) — judge your own folder for a real verdict.</p>
-  <div class="judge-bar" role="group" aria-label="Presiding judge">
-    <span class="judge-label">Presiding judge</span>
-    <button type="button" class="judge-btn" data-voice="strict">Strict</button>
-    <button type="button" class="judge-btn active" data-voice="fair">Fair</button>
-    <button type="button" class="judge-btn" data-voice="lenient">Lenient</button>
-  </div>
   <p id="judgeName">The Fair Judge presiding.</p>
 
   <h2 class="verdict">The Verdict</h2>
   <div id="verdictTier"></div>
   <p id="verdictSummary"></p>
   <p id="sentenceLine"></p>
+
+  <div id="commentaryBox" hidden>
+    <h3>Court Commentary</h3>
+    <p id="commentaryLine"></p>
+  </div>
 
   <table class="evidence">
     <tbody id="evidenceBody"></tbody>

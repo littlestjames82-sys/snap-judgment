@@ -392,4 +392,86 @@ check("share text gains the stands line when the plea changes nothing", () => {
   assert.ok(!bare.includes("plea bargain"));
 });
 
+/* --- roast intensity bands ---------------------------------------------- */
+
+check("intensity bands map slider values to levels and names", () => {
+  const cases = [
+    [0, 0, "Gentle"], [19, 0, "Gentle"],
+    [20, 1, "Kind"], [39, 1, "Kind"],
+    [40, 2, "Honest"], [50, 2, "Honest"], [59, 2, "Honest"],
+    [60, 3, "Spicy"], [79, 3, "Spicy"],
+    [80, 4, "Full roast"], [100, 4, "Full roast"]
+  ];
+  cases.forEach(([value, level, name]) => {
+    const band = demo.intensityBand(value);
+    assert.strictEqual(band.level, level, "level for " + value);
+    assert.strictEqual(band.name, name, "name for " + value);
+  });
+  /* Out-of-range values clamp to the end bands. */
+  assert.strictEqual(demo.intensityBand(-5).level, 0);
+  assert.strictEqual(demo.intensityBand(250).level, 4);
+});
+
+/* --- court commentary ----------------------------------------------------- */
+
+/* A hand-built stats object in the shape computeStats returns. */
+function fakeStats(overrides) {
+  return Object.assign({
+    count: 100, nightCount: 10, nightShare: 10,
+    duplicateSuspects: 0, longestStreak: 2, oldestAgeYears: 0
+  }, overrides || {});
+}
+
+check("commentary: gentle and full roast differ on the same night folder", () => {
+  const s = fakeStats({ count: 266, nightCount: 127, nightShare: 47.7, longestStreak: 3, oldestAgeYears: 1 });
+  const gentle = demo.courtCommentary(s, 0);
+  const roast = demo.courtCommentary(s, 4);
+  assert.strictEqual(gentle,
+    "The court sees 127 screenshots taken at night and simply notes the defendant keeps late hours.");
+  assert.strictEqual(roast,
+    "127 screenshots after 10 PM. The court has reviewed the defendant's sleep schedule and found it guilty too.");
+  assert.notStrictEqual(gentle, roast);
+});
+
+check("commentary priority: a night case beats a duplicates case", () => {
+  /* Qualifies for both night (share 52 >= 40) and duplicates (40 >= 10);
+   * the night template must win. */
+  const s = fakeStats({ count: 300, nightCount: 156, nightShare: 52, duplicateSuspects: 40 });
+  assert.strictEqual(demo.courtCommentary(s, 2),
+    "156 of these screenshots, 52.0%, were taken between 10 PM and 5 AM. That is not a habit. That is a second shift.");
+});
+
+check("commentary: the gentle band stays gentle for a 2,500 folder", () => {
+  const s = fakeStats({ count: 2500, nightCount: 250, nightShare: 10 });
+  assert.strictEqual(demo.courtCommentary(s, 0),
+    "The court counts 2,500 screenshots and sees a thorough archivist at work. Every one of them meant something once.");
+});
+
+check("commentary never mutates the stats it reads", () => {
+  function deepFreeze(obj) {
+    if (obj && typeof obj === "object") {
+      Object.keys(obj).forEach(k => deepFreeze(obj[k]));
+      Object.freeze(obj);
+    }
+    return obj;
+  }
+  const s = deepFreeze(fakeStats({
+    count: 266, nightCount: 127, nightShare: 47.7, duplicateSuspects: 3,
+    longestStreak: 9, oldestAgeYears: 2,
+    oldest: { name: "old.png", mtime: 1700000000000, label: "Nov 14, 2023" },
+    awards: [{ name: "Night Owl", detail: "frozen" }]
+  }));
+  const snapshot = JSON.stringify(s);
+  for (let lvl = 0; lvl <= 4; lvl++) demo.courtCommentary(s, lvl);
+  assert.strictEqual(JSON.stringify(s), snapshot);
+});
+
+check("commentary: No Evidence gets the same gentle line at every band", () => {
+  const empty = demo.computeStats([]);
+  for (let lvl = 0; lvl <= 4; lvl++) {
+    assert.strictEqual(demo.courtCommentary(empty, lvl),
+      "No evidence, no commentary. The court does not roast an empty folder.");
+  }
+});
+
 console.log("\n" + passed + " test groups passed.");

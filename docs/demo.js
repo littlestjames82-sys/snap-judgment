@@ -1,10 +1,10 @@
 /* Snap Judgment - browser demo.
  *
  * Pure stats core (verdictForCount, isScreenshotFile, parseDimensions,
- * computeStats, computePleaBargain, pleaClosing, sentenceFor) is
- * environment-agnostic and unit-tested from Node via
- * tools/demo_js_test.js. Browser wiring lives at the bottom, guarded by
- * typeof window checks.
+ * computeStats, computePleaBargain, pleaClosing, sentenceFor,
+ * intensityBand, courtCommentary) is environment-agnostic and
+ * unit-tested from Node via tools/demo_js_test.js. Browser wiring
+ * lives at the bottom, guarded by typeof window checks.
  *
  * The stats core is a faithful port of the Python tool's analyze(),
  * compute_awards(), compute_plea_bargain() and judge voices: same
@@ -298,6 +298,7 @@ function computeStats(files, nowMs) {
     oldest: null,
     exhibits: [],
     futureShot: null,
+    oldestAgeYears: 0,
     anniversary: null,
     heatmap: [],
     duplicateGroups: 0,
@@ -468,6 +469,7 @@ function computeStats(files, nowMs) {
     return { name: s.name, mtime: s.mtime, label: dateLabel(s.mtime) };
   });
   stats.futureShot = futureShot;
+  stats.oldestAgeYears = Math.max(0, Math.floor((nowMs - start) / (365.25 * 86400000)));
   stats.anniversary = anniversary;
   stats.duplicateGroups = dupGroupCount;
   stats.duplicateFiles = dupFiles;
@@ -629,6 +631,110 @@ function pleaClosing(plea, currentTier) {
   return "The court notes this plea changes nothing. The verdict stands.";
 }
 
+/* ------------------------------------------------------------------ */
+/* Roast intensity and court commentary                                */
+/* ------------------------------------------------------------------ */
+
+/* The roast intensity slider runs 0-100 in five bands. Intensity is
+ * wording only: it flavors the court commentary below and never
+ * touches the verdict, the counts, the awards, or the plea math. */
+var INTENSITY_BANDS = ["Gentle", "Kind", "Honest", "Spicy", "Full roast"];
+
+function intensityBand(value) {
+  var v = Number(value);
+  if (isNaN(v)) v = 50;
+  v = Math.max(0, Math.min(100, v));
+  var level = v < 20 ? 0 : v < 40 ? 1 : v < 60 ? 2 : v < 80 ? 3 : 4;
+  return { level: level, name: INTENSITY_BANDS[level] };
+}
+
+var NO_COMMENTARY =
+  "No evidence, no commentary. The court does not roast an empty folder.";
+
+/* One template per band (Gentle, Kind, Honest, Spicy, Full roast) for
+ * each case the court can comment on. Tokens: {night} night count,
+ * {share} night share, {count} total screenshots, {dup} duplicate
+ * extras, {streak} longest streak, {age} oldest screenshot's age in
+ * years. The roasts are about the habit, never the person. */
+var COMMENTARY = {
+  night: [
+    "The court sees {night} screenshots taken at night and simply notes the defendant keeps late hours.",
+    "{night} screenshots after dark, {share}% of the whole folder. The court suspects the defendant's best ideas simply arrive after 10 PM.",
+    "{night} of these screenshots, {share}%, were taken between 10 PM and 5 AM. That is not a habit. That is a second shift.",
+    "{share}% of this folder was captured in the dark, {night} screenshots in total. The court is beginning to think the defendant considers daylight a rumor.",
+    "{night} screenshots after 10 PM. The court has reviewed the defendant's sleep schedule and found it guilty too."
+  ],
+  hoard: [
+    "The court counts {count} screenshots and sees a thorough archivist at work. Every one of them meant something once.",
+    "{count} screenshots is a serious collection. The court admires the commitment, even if the filing system is more of a pile.",
+    "{count} screenshots. The court notes the defendant has never once paused to think, perhaps I already have this one.",
+    "{count} screenshots. Somewhere around the halfway mark this stopped being a folder and became a storage unit.",
+    "{count} screenshots. The court would ask the defendant to produce one specific screenshot, but nobody involved has that kind of time. That is rather the point."
+  ],
+  dup: [
+    "The court found {dup} screenshots that duplicate a sibling, and chooses to believe the defendant simply wanted to be sure.",
+    "{dup} duplicate extras. The defendant screenshots the way nervous travelers check for their passport, repeatedly and just in case.",
+    "{dup} of these screenshots are exact copies of another screenshot. The same moment, filed twice, for safekeeping.",
+    "{dup} duplicates. The defendant's working theory appears to be that a screenshot does not count until it exists twice.",
+    "{dup} duplicate screenshots. The court has now reviewed the same evidence multiple times, and it was not that compelling the first time."
+  ],
+  streak: [
+    "The court notes a {streak}-day streak of screenshots and sees real consistency in it. Some people keep a journal. The defendant keeps screenshots.",
+    "{streak} days in a row with at least one screenshot. The streak itself is impressive. The restraint is harder to find.",
+    "{streak} consecutive days of screenshots. The court has seen shorter relationships, and less committed ones.",
+    "{streak} straight days, not one missed. Whatever appeared on that screen, it never stood a chance of going uncaptured.",
+    "A {streak}-day streak, unbroken. The court hereby promotes screenshotting from habit to lifestyle, effective retroactively."
+  ],
+  old: [
+    "The oldest screenshot here is {age} years old, and the court finds something sweet in that. Some things are simply worth keeping.",
+    "A screenshot from {age} years ago still lives in this folder. The court respects a long memory, even a digital one.",
+    "The oldest evidence is {age} years old. The court asks, for the record, if the defendant remembers taking it, or why.",
+    "{age} years old, the senior screenshot in this folder has survived new phones, new updates, and several opportunities to delete it.",
+    "The court presents a screenshot {age} years old. It has been migrated from device to device like a family heirloom, except an heirloom is occasionally looked at."
+  ],
+  plain: [
+    "The court has reviewed {count} screenshots and finds a perfectly ordinary folder. The defendant is free to go.",
+    "{count} screenshots, and nothing the court has not seen a hundred times. A respectable, unremarkable collection.",
+    "{count} screenshots. Not a crime scene, not a model of restraint. The court records a shrug and moves on.",
+    "{count} screenshots, and the most notable thing about them is that there are {count} of them. The court expected either far more drama or far less folder.",
+    "{count} screenshots. The court searched this folder for a scandal and found only volume. Even the commentary is disappointed."
+  ]
+};
+
+function fillCommentary(tpl, values) {
+  return tpl.replace(/\{(\w+)\}/g, function (m, key) {
+    return values[key] !== undefined ? values[key] : m;
+  });
+}
+
+/* The court's commentary on a hearing: one line, flavored by the
+ * roast intensity band (level 0-4), aimed at the defendant's most
+ * damning stat. Priority: night share of 40% or more, then a count of
+ * 1,000 or more, then 10 or more duplicate extras, then a streak of
+ * 14 days or more, then an oldest screenshot 5 years old or more,
+ * then the plain count. Pure: reads stats, never writes to it. */
+function courtCommentary(stats, level) {
+  if (!stats || !stats.count) return NO_COMMENTARY;
+  var lvl = Math.floor(Number(level));
+  if (isNaN(lvl)) lvl = 2;
+  lvl = Math.max(0, Math.min(4, lvl));
+  var values = {
+    night: stats.nightCount || 0,
+    share: Number(stats.nightShare || 0).toFixed(1),
+    count: Number(stats.count).toLocaleString("en-US"),
+    dup: stats.duplicateSuspects || 0,
+    streak: stats.longestStreak || 0,
+    age: stats.oldestAgeYears || 0
+  };
+  var key = "plain";
+  if (stats.nightShare >= 40) key = "night";
+  else if (stats.count >= 1000) key = "hoard";
+  else if ((stats.duplicateSuspects || 0) >= 10) key = "dup";
+  else if ((stats.longestStreak || 0) >= 14) key = "streak";
+  else if ((stats.oldestAgeYears || 0) >= 5) key = "old";
+  return fillCommentary(COMMENTARY[key][lvl], values);
+}
+
 /* The ready-to-post verdict text for the copy button. When a plea
  * bargain rides along on the stats, the text gains the plea line:
  * the projected drop when the plea improves the tier, the standing
@@ -756,6 +862,9 @@ if (typeof module !== "undefined" && module.exports) {
     computeStats: computeStats,
     computePleaBargain: computePleaBargain,
     pleaClosing: pleaClosing,
+    intensityBand: intensityBand,
+    courtCommentary: courtCommentary,
+    INTENSITY_BANDS: INTENSITY_BANDS,
     verdictPostText: verdictPostText,
     makeSampleFiles: makeSampleFiles
   };
@@ -784,6 +893,7 @@ function initDemo() {
   var overlay = document.getElementById("dropOverlay");
   var currentStats = null;
   var currentVoice = "fair";
+  var currentIntensity = 50;
   var currentSample = false;
 
   function setStatus(msg) { status.textContent = msg; }
@@ -992,6 +1102,30 @@ function initDemo() {
     if (judgeEl) judgeEl.textContent = JUDGE_NAMES[currentVoice] + " presiding.";
   }
 
+  /* --- roast intensity: wording only, never the math ----------------- */
+
+  var roastRange = document.getElementById("roastRange");
+  var roastBandEl = document.getElementById("roastBand");
+  function syncRoastBand() {
+    if (roastBandEl) roastBandEl.textContent = intensityBand(currentIntensity).name;
+  }
+  if (roastRange) {
+    roastRange.addEventListener("input", function () {
+      currentIntensity = Number(roastRange.value);
+      syncRoastBand();
+      if (currentStats && currentStats.count > 0) renderCommentary(currentStats);
+    });
+  }
+  syncRoastBand();
+
+  function renderCommentary(stats) {
+    var box = document.getElementById("commentaryBox");
+    var line = document.getElementById("commentaryLine");
+    if (!box || !line) return;
+    line.textContent = courtCommentary(stats, intensityBand(currentIntensity).level);
+    box.hidden = false;
+  }
+
   /* --- scanning ------------------------------------------------------- */
 
   async function scanWithPicker() {
@@ -1068,6 +1202,7 @@ function initDemo() {
       stats.count + " screenshots, " + stats.totalSizeHuman + " of evidence, spanning " +
       stats.spanStartLabel + " to " + stats.spanEndLabel + ".";
     renderSentence(stats);
+    renderCommentary(stats);
 
     var rows = [
       ["Total screenshots", stats.count.toLocaleString("en-US")],
