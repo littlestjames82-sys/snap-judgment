@@ -37,6 +37,8 @@ snapjudgment ~/Pictures --judge-file poet.json  # a custom judge voice from a JS
 snapjudgment ~/Pictures --intensity roast  # court commentary at full roast (0-100 or gentle|kind|honest|spicy|roast)
 snapjudgment ~/Pictures --wrapped-kit ./kit     # year-scoped SVG card + ready-to-post drafts
 snapjudgment ~/Downloads --court downloads  # the downloads docket: a second court, for the downloads folder
+snapjudgment --grand-jury ~/Pictures/Screenshots ~/Downloads  # both courts, one hearing, a combined FULL DOCKET verdict
+snapjudgment ~/Downloads --court downloads --recursive  # the docket judges subfolders too
 snapjudgment ~/Pictures --cleanup-list cleanup.txt  # the cleanup order: the exact files a plea bargain would remove
 snapjudgment ~/Pictures --plea-bargain   # the hypothetical verdict if you deleted the old and the duplicated
 snapjudgment ~/Pictures --rematch        # compare this hearing with the last one on record
@@ -241,12 +243,54 @@ the docket's own ladder), the full HTML report (`--html`),
 `--rematch` against the last downloads hearing, `--year`,
 `--wrapped-kit`, `--csv` (one row per file, categorized as installer,
 archive, or other), the `--since` / `--until` date filters, and the
-court record all work in this court. Only the comparisons (`--vs`,
-`--vs-year`), the plea bargain, the cleanup order, and judge packs
+court record all work in this court. The cleanup order works here
+too, listing only the provable waste: the duplicate-download extra
+copies, every group member except the keeper. Only the comparisons
+(`--vs`, `--vs-year`), the plea bargain, and judge packs
 (`--judge-file`) are refused with a plain error, because they belong
 to the screenshots court's evidence. A sample hearing is at
 `examples/downloads-demo-output.txt`. `--court` can also live in the
 config file.
+
+`--recursive` lets the docket judge subfolders too, not just the
+surface. The evidence gains a per-folder breakdown (also the
+`folders` list in JSON), and duplicate-download grouping stays
+within each containing folder: a `setup.exe` in two different
+folders is not a duplicate chain.
+
+### The grand jury
+
+`--grand-jury` convenes both courts in one hearing: the screenshots
+court and the downloads docket, tried together, with a combined
+verdict. Pass both folders (screenshots first, downloads second) or
+pass neither, in which case the screenshots court looks in the usual
+places and the docket sits on `~/Downloads`. One folder alone is a
+plain error; the grand jury needs both defendants or none.
+
+Each court issues its compact verdict block, and the hearing closes
+with THE FULL DOCKET: the combined file count and size, both
+verdicts side by side, and a standing line in the presiding judge's
+voice, keyed to the pair of severities. Two tidy folders earn an
+acquittal. Two crime scenes earn the harshest line the judge has.
+Anything in between is a split verdict, and it names the worse
+folder as the problem. A court whose folder is missing or empty
+reports No Evidence, and the combined report still issues for the
+other; the exit code is 2 only when neither court has evidence.
+
+`--judge` and `--intensity` apply to both courts at once, and
+`--fail-above` is resolved per court against that court's own
+ladder, tripping if either verdict ranks above the tier. `--json`
+nests each court's usual object under `screenshots` and `downloads`
+keys, with a `combined` summary of files, bytes, and both tiers.
+`--png`, `--svg`, and `--card` render a FULL DOCKET share card (both
+verdicts, the combined size, and the first award from each court),
+and `--out` mirrors the whole hearing in Markdown. Both hearings
+enter the court record as normal entries, so each court's
+`--rematch` keeps working afterward. Single-court procedure (the
+comparisons, the plea bargain, the cleanup order, the wrapped kit,
+date scopes, `--history`, judge packs, `--csv`, the badge, and the
+HTML report) does not combine with a grand jury and is refused with
+a plain error.
 
 ### Rematch
 

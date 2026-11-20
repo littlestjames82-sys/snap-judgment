@@ -8,6 +8,8 @@ _snapjudgment() {
     _arguments -s \
         '--court=[which court sits]:court:(screenshots downloads)' \
         '--all[treat every image in the folders as a screenshot]' \
+        '--grand-jury[convene both courts in one hearing, with a combined FULL DOCKET verdict]' \
+        '--recursive[downloads court only: judge subfolders too, grouping duplicate downloads within each folder]' \
         '--json[print the verdict as JSON instead of the report]' \
         '--card=[write a self-contained HTML share card to FILE]:file:_files' \
         '--svg=[write an SVG share card (1200x630) to FILE]:file:_files' \

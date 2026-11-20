@@ -45,7 +45,7 @@ try:
 except ModuleNotFoundError:  # Python 3.9 and 3.10 have no tomllib
     tomllib = None
 
-__version__ = "0.10.0"
+__version__ = "0.11.0"
 
 # ---------------------------------------------------------------------------
 # detection
@@ -1431,8 +1431,9 @@ class DlFile:
     ext: str
 
 
-def collect_downloads(folders, skipped=None) -> list:
-    """Every file directly inside the folders (never recursive).
+def collect_downloads(folders, skipped=None, recursive: bool = False) -> list:
+    """Every file directly inside the folders (the whole tree, when
+    `recursive` is set).
 
     The downloads court judges whatever is lying on the surface: any
     type, no name hints, no header reads. A file that cannot be read
@@ -1442,10 +1443,19 @@ def collect_downloads(folders, skipped=None) -> list:
     files: list[DlFile] = []
     skipped_count = 0
     for folder in folders:
-        try:
-            entries = list(Path(folder).iterdir())
-        except OSError:
-            continue
+        if recursive:
+            entries = [
+                Path(root) / name
+                for root, _dirs, names in os.walk(
+                    folder, onerror=_walk_onerror
+                )
+                for name in names
+            ]
+        else:
+            try:
+                entries = list(Path(folder).iterdir())
+            except OSError:
+                continue
         for entry in entries:
             try:
                 if not entry.is_file():
@@ -1484,8 +1494,14 @@ def _dl_group_key(name: str):
     return (stem.strip().lower(), Path(name).suffix.lower())
 
 
-def analyze_downloads(files: list, now: datetime | None = None) -> dict:
-    """Every statistic for a downloads hearing (metadata only)."""
+def analyze_downloads(files: list, now: datetime | None = None,
+                      recursive: bool = False) -> dict:
+    """Every statistic for a downloads hearing (metadata only).
+
+    Duplicate downloads are grouped by name key; in recursive mode
+    the grouping stays within each containing folder, so a setup.exe
+    in two different folders is not a duplicate chain.
+    """
     now = now or datetime.now()
     count = len(files)
     total_bytes = sum(f.size for f in files)
@@ -1494,19 +1510,28 @@ def analyze_downloads(files: list, now: datetime | None = None) -> dict:
     archives = [f for f in files if f.ext in DL_ARCHIVE_EXTS]
 
     groups: dict = defaultdict(list)
+    group_stems: dict = {}
     for f in files:
-        groups[_dl_group_key(f.name)].append(f)
+        name_key = _dl_group_key(f.name)
+        group_key = (
+            (str(Path(f.path).parent), name_key) if recursive
+            else name_key
+        )
+        groups[group_key].append(f)
+        group_stems[group_key] = name_key[0]
     duplicate_groups = 0
     duplicate_extra = 0
     duplicate_extra_bytes = 0
-    for key, members in groups.items():
+    duplicate_extra_paths: list = []
+    for group_key, members in groups.items():
         if len(members) < 2:
             continue
         duplicate_groups += 1
+        stem = group_stems[group_key]
         keeper = min(
             members,
             key=lambda f: (
-                0 if Path(f.name).stem.lower() == key[0] else 1,
+                0 if Path(f.name).stem.lower() == stem else 1,
                 f.name.lower(),
             ),
         )
@@ -1514,6 +1539,7 @@ def analyze_downloads(files: list, now: datetime | None = None) -> dict:
             if member is not keeper:
                 duplicate_extra += 1
                 duplicate_extra_bytes += member.size
+                duplicate_extra_paths.append(member.path)
 
     oldest = min(files, key=lambda f: (f.mtime, f.name))
     largest = max(files, key=lambda f: (f.size, f.name))
@@ -1532,7 +1558,7 @@ def analyze_downloads(files: list, now: datetime | None = None) -> dict:
 
     first_date = files[0].dt.date()
     last_date = files[-1].dt.date()
-    return {
+    stats = {
         "count": count,
         "total_bytes": total_bytes,
         "total_human": human_bytes(total_bytes),
@@ -1547,6 +1573,7 @@ def analyze_downloads(files: list, now: datetime | None = None) -> dict:
         "duplicate_groups": duplicate_groups,
         "duplicate_extra": duplicate_extra,
         "duplicate_extra_bytes": duplicate_extra_bytes,
+        "duplicate_extra_paths": sorted(duplicate_extra_paths),
         "oldest_name": oldest.name,
         "oldest_date": oldest.dt.date(),
         "oldest_dt": oldest.dt,
@@ -1564,6 +1591,17 @@ def analyze_downloads(files: list, now: datetime | None = None) -> dict:
         ),
         "skipped": 0,
     }
+    if recursive:
+        folder_counts = Counter(
+            str(Path(f.path).parent) for f in files
+        )
+        stats["folders"] = [
+            {"path": path, "count": n}
+            for path, n in sorted(
+                folder_counts.items(), key=lambda kv: (-kv[1], kv[0])
+            )
+        ]
+    return stats
 
 
 def compute_downloads_awards(stats: dict) -> list[dict]:
@@ -1740,6 +1778,16 @@ def _dl_evidence_lines(stats: dict) -> list[tuple[str, str]]:
                 for entry in stats["extensions"][:5]
             ))
         )
+    folders = stats.get("folders")
+    if folders:
+        for index, entry in enumerate(folders[:5]):
+            label = "Folders" if index == 0 else ""
+            lines.append(
+                (label, f"{entry['path']} - {entry['count']:,} "
+                        f"file{'s' if entry['count'] != 1 else ''}")
+            )
+        if len(folders) > 5:
+            lines.append(("", f"and {len(folders) - 5} more"))
     if stats.get("skipped"):
         lines.append(("Files the court could not read", f"{stats['skipped']}"))
     return lines
@@ -3980,6 +4028,18 @@ def build_parser() -> argparse.ArgumentParser:
                              "~/Downloads) from names, sizes, and dates")
     parser.add_argument("--all", action="store_true",
                         help="treat every image in the folders as a screenshot")
+    parser.add_argument("--grand-jury", action="store_true",
+                        dest="grand_jury",
+                        help="convene both courts in one hearing: the "
+                             "screenshots court and the downloads docket, "
+                             "with a combined FULL DOCKET verdict (pass "
+                             "both folders, screenshots first, or pass "
+                             "neither and let the court look in the "
+                             "usual places)")
+    parser.add_argument("--recursive", action="store_true",
+                        help="downloads court only: judge subfolders "
+                             "too, not just the surface; duplicate "
+                             "downloads are grouped within each folder")
     parser.add_argument("--json", action="store_true",
                         help="print the verdict as JSON instead of the report")
     parser.add_argument("--card", metavar="FILE",
@@ -4064,7 +4124,6 @@ def _run_downloads_court(args) -> int:
         ("--vs", args.vs is not None),
         ("--vs-year", args.vs_year is not None),
         ("--plea-bargain", bool(args.plea_bargain)),
-        ("--cleanup-list", args.cleanup_list is not None),
         ("--judge-file", args.judge_file is not None),
     ]
     for flag, present in unsupported:
@@ -4152,7 +4211,9 @@ def _run_downloads_court(args) -> int:
         folders = [default_folder]
 
     skipped_box = [0]
-    files = collect_downloads(folders, skipped=skipped_box)
+    files = collect_downloads(
+        folders, skipped=skipped_box, recursive=args.recursive
+    )
     if year is not None:
         files = [f for f in files if f.dt.year == year]
     if since_date is not None:
@@ -4173,6 +4234,13 @@ def _run_downloads_court(args) -> int:
     voice = args.judge
 
     if not files:
+        if args.cleanup_list is not None:
+            print(
+                "snapjudgment: --cleanup-list cannot be issued: the "
+                "downloads folder produced no files to judge",
+                file=sys.stderr,
+            )
+            return 2
         if kit_dir is not None:
             print(
                 f"snapjudgment: no files from {year} to wrap; "
@@ -4221,13 +4289,45 @@ def _run_downloads_court(args) -> int:
             })
         return 2
 
-    stats = analyze_downloads(files)
+    stats = analyze_downloads(files, recursive=args.recursive)
     stats["skipped"] = skipped_box[0]
     tier, sentence = downloads_verdict_for(stats["count"], voice=voice)
     awards = compute_downloads_awards(stats)
     commentary = None
     if intensity is not None:
         commentary = downloads_commentary(stats, intensity)
+
+    cleanup = None
+    if args.cleanup_list is not None:
+        # The docket's cleanup order lists only the provable waste:
+        # the duplicate-download extra copies, every group member
+        # except the keeper. Nothing is ever deleted.
+        cleanup = {
+            "file": args.cleanup_list,
+            "count": stats["duplicate_extra"],
+            "bytes": stats["duplicate_extra_bytes"],
+            "paths": stats["duplicate_extra_paths"],
+        }
+        header = [
+            "# Cleanup order issued by Snap Judgment.",
+            f"# {cleanup['count']} files, {cleanup['bytes']} bytes "
+            f"({human_bytes(cleanup['bytes'])}) would be removed: "
+            f"duplicate download extras, every copy but the keeper.",
+            "# The court deletes nothing. This list is yours to "
+            "act on, or not.",
+        ]
+        try:
+            Path(args.cleanup_list).write_text(
+                "\n".join(header + cleanup["paths"]) + "\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            print(
+                f"snapjudgment: could not write cleanup list: "
+                f"{args.cleanup_list}",
+                file=sys.stderr,
+            )
+            return 2
 
     rematch = None
     if args.rematch:
@@ -4290,11 +4390,19 @@ def _run_downloads_court(args) -> int:
 
     if args.json:
         data = build_downloads_json(
-            stats, tier, sentence, awards, folder_stats,
+            stats, tier, sentence, awards,
+            stats.get("folders", folder_stats) if args.recursive
+            else folder_stats,
             judge=judge_label, commentary=commentary,
         )
         if year is not None:
             data["year"] = year
+        if cleanup is not None:
+            data["cleanup_order"] = {
+                "file": cleanup["file"],
+                "count": cleanup["count"],
+                "bytes": cleanup["bytes"],
+            }
         if args.rematch:
             data["rematch"] = (
                 {
@@ -4318,6 +4426,13 @@ def _run_downloads_court(args) -> int:
             ))
             if args.rematch:
                 print(render_downloads_rematch_section(rematch, tier))
+            if cleanup is not None:
+                print(
+                    f"  CLEANUP ORDER: {cleanup['count']} files "
+                    f"({human_bytes(cleanup['bytes'])}) listed in "
+                    f"{cleanup['file']}. The court does not swing "
+                    f"the axe itself."
+                )
             if args.badge:
                 print(args.badge)
             for kit_path in kit_written:
@@ -4336,9 +4451,757 @@ def _run_downloads_court(args) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# the grand jury: both courts, one hearing, a combined FULL DOCKET
+# ---------------------------------------------------------------------------
+
+# The standing of the full docket, keyed by the presiding judge's
+# voice and by the pair of severities: "low" when both courts sit in
+# their bottom two tiers, "high" when both sit in their top two, and
+# "mixed" otherwise. {worse} names the folder carrying the heavier
+# evidence ("both folders" when the pair is tied). A court with no
+# evidence counts as below the bottom tier.
+GRAND_JURY_STANDING = {
+    "strict": {
+        "low": (
+            "The court searched both folders for a case and found "
+            "only housekeeping. Suspiciously clean. Both folders "
+            "remain under observation."
+        ),
+        "mixed": (
+            "The court weighs both folders and finds the heavier "
+            "evidence in {worse}. That is where the sentence lands, "
+            "and it will not be light."
+        ),
+        "high": (
+            "Both folders stand guilty, and the combined docket is "
+            "the worst this court has entered into the record all "
+            "year. The court is almost impressed."
+        ),
+    },
+    "fair": {
+        "low": (
+            "The court finds little to prosecute. Both folders are "
+            "disappointingly tidy, and the court accepts the "
+            "disappointment."
+        ),
+        "mixed": (
+            "The court's verdict is split, and the weight of it "
+            "lands on {worse}. The sentence falls where the evidence "
+            "is heaviest."
+        ),
+        "high": (
+            "The court has seen enough. Two folders, two crime "
+            "scenes, one defendant. The full docket is an archive "
+            "of good intentions and no deletions."
+        ),
+    },
+    "lenient": {
+        "low": (
+            "The court finds two tidy folders and very little to "
+            "forgive. The case is nearly dismissed, with genuine "
+            "affection."
+        ),
+        "mixed": (
+            "The court has weighed the whole docket, and the "
+            "heavier heart belongs to {worse}. The court prescribes "
+            "a gentle sort, starting there."
+        ),
+        "high": (
+            "The court loves a rich archive, and this is two of "
+            "them at once. Nothing here is a crime; it is simply a "
+            "great deal of keeping, in stereo."
+        ),
+    },
+}
+
+
+def grand_jury_standing(voice: str, shots_tier: str, dl_tier: str) -> str:
+    """The FULL DOCKET standing line for a pair of verdicts, in the
+    presiding judge's voice."""
+    shots_rank = (
+        tier_rank(shots_tier) if shots_tier != "No Evidence" else -1
+    )
+    dl_rank = (
+        dl_tier_rank(dl_tier) if dl_tier != "No Evidence" else -1
+    )
+    if max(shots_rank, dl_rank) <= 1:
+        pair_class = "low"
+    elif min(shots_rank, dl_rank) >= 4:
+        pair_class = "high"
+    else:
+        pair_class = "mixed"
+    if shots_rank > dl_rank:
+        worse = "the screenshots folder"
+    elif dl_rank > shots_rank:
+        worse = "the downloads folder"
+    else:
+        worse = "both folders"
+    return GRAND_JURY_STANDING[voice][pair_class].format(worse=worse)
+
+
+def _hear_screenshots(folder, voice, intensity, all_images=False,
+                      prefound=None) -> dict:
+    """One screenshots-court hearing for the grand jury. `folder` is
+    a Path or None (None, a missing folder, or a folder with no
+    screenshots all produce a No Evidence hearing). `prefound` is an
+    optional (shots, recordings, skipped) triple from an earlier
+    scan of the same folder."""
+    hearing = {
+        "court": "screenshots",
+        "folder": str(folder) if folder is not None else None,
+        "has_evidence": False,
+        "stats": None,
+        "tier": "No Evidence",
+        "sentence": "",
+        "awards": [],
+        "commentary": None,
+        "count": 0,
+        "total_bytes": 0,
+        "recordings": 0,
+        "skipped": 0,
+        "folders_json": [],
+    }
+    shots, recordings, skipped = [], [], 0
+    if prefound is not None:
+        shots, recordings, skipped = prefound
+    elif folder is not None and folder.is_dir():
+        box = [0]
+        shots, recordings = collect(
+            [folder], all_images=all_images, skipped=box
+        )
+        skipped = box[0]
+    hearing["recordings"] = len(recordings)
+    hearing["skipped"] = skipped
+    if folder is not None:
+        hearing["folders_json"] = [
+            {"path": str(folder), "count": len(shots)}
+        ]
+    if not shots:
+        if intensity is not None:
+            hearing["commentary"] = court_commentary({}, intensity)
+        return hearing
+    stats = analyze(shots, recordings)
+    stats["skipped"] = skipped
+    stats["date_filter"] = {"since": None, "until": None}
+    tier, sentence = verdict_for(stats["count"], voice=voice)
+    hearing.update({
+        "has_evidence": True,
+        "stats": stats,
+        "tier": tier,
+        "sentence": sentence,
+        "awards": compute_awards(stats, voice=voice),
+        "count": stats["count"],
+        "total_bytes": stats["total_bytes"],
+    })
+    if intensity is not None:
+        hearing["commentary"] = court_commentary(stats, intensity)
+    return hearing
+
+
+def _hear_downloads(folder, voice, intensity, recursive=False) -> dict:
+    """One downloads-docket hearing for the grand jury. `folder` is
+    a Path or None; a missing or empty folder is a No Evidence
+    hearing."""
+    hearing = {
+        "court": "downloads",
+        "folder": str(folder) if folder is not None else None,
+        "has_evidence": False,
+        "stats": None,
+        "tier": "No Evidence",
+        "sentence": "",
+        "awards": [],
+        "commentary": None,
+        "count": 0,
+        "total_bytes": 0,
+        "recordings": 0,
+        "skipped": 0,
+        "folders_json": [],
+    }
+    files = []
+    skipped = 0
+    if folder is not None and folder.is_dir():
+        box = [0]
+        files = collect_downloads(
+            [folder], skipped=box, recursive=recursive
+        )
+        skipped = box[0]
+    hearing["skipped"] = skipped
+    if folder is not None:
+        hearing["folders_json"] = [
+            {"path": str(folder), "count": len(files)}
+        ]
+    if not files:
+        if intensity is not None:
+            hearing["commentary"] = downloads_commentary({}, intensity)
+        return hearing
+    stats = analyze_downloads(files, recursive=recursive)
+    stats["skipped"] = skipped
+    tier, sentence = downloads_verdict_for(stats["count"], voice=voice)
+    hearing.update({
+        "has_evidence": True,
+        "stats": stats,
+        "tier": tier,
+        "sentence": sentence,
+        "awards": compute_downloads_awards(stats),
+        "count": stats["count"],
+        "total_bytes": stats["total_bytes"],
+    })
+    if recursive:
+        hearing["folders_json"] = stats.get(
+            "folders", hearing["folders_json"]
+        )
+    if intensity is not None:
+        hearing["commentary"] = downloads_commentary(stats, intensity)
+    return hearing
+
+
+def _grand_jury_screenshots_json(hearing: dict, judge_label: str) -> dict:
+    """The screenshots hearing as a JSON object: the court's usual
+    shape, including its No Evidence shape."""
+    if not hearing["has_evidence"]:
+        data = {
+            "version": __version__,
+            "court": "screenshots",
+            "folders": hearing["folders_json"],
+            "verdict": "No Evidence",
+            "judge": judge_label,
+            "year": None,
+            "count": 0,
+            "recordings": hearing["recordings"],
+            "skipped": hearing["skipped"],
+            "awards": [],
+        }
+        if hearing["commentary"] is not None:
+            data["commentary"] = hearing["commentary"]
+        return data
+    return build_json(
+        hearing["stats"], hearing["tier"], hearing["sentence"],
+        hearing["awards"], hearing["folders_json"], year=None,
+        judge=judge_label, commentary=hearing["commentary"],
+    )
+
+
+def _grand_jury_downloads_json(hearing: dict, judge_label: str) -> dict:
+    """The downloads hearing as a JSON object: the docket's usual
+    shape, including its No Evidence shape."""
+    if not hearing["has_evidence"]:
+        data = {
+            "version": __version__,
+            "court": "downloads",
+            "folders": hearing["folders_json"],
+            "verdict": "No Evidence",
+            "judge": judge_label,
+            "count": 0,
+            "skipped": hearing["skipped"],
+            "awards": [],
+        }
+        if hearing["commentary"] is not None:
+            data["commentary"] = hearing["commentary"]
+        return data
+    return build_downloads_json(
+        hearing["stats"], hearing["tier"], hearing["sentence"],
+        hearing["awards"], hearing["folders_json"],
+        judge=judge_label, commentary=hearing["commentary"],
+    )
+
+
+def _grand_jury_combined(shots_h: dict, dl_h: dict) -> dict:
+    total_files = shots_h["count"] + dl_h["count"]
+    total_bytes = shots_h["total_bytes"] + dl_h["total_bytes"]
+    return {
+        "files": total_files,
+        "bytes": total_bytes,
+        "human": human_bytes(total_bytes),
+    }
+
+
+def _grand_jury_card_awards(shots_h: dict, dl_h: dict) -> list:
+    """Up to two award names for the FULL DOCKET card: the first
+    award from each court."""
+    names = []
+    if shots_h["awards"]:
+        names.append(shots_h["awards"][0]["name"])
+    if dl_h["awards"]:
+        names.append(dl_h["awards"][0]["name"])
+    return names
+
+
+def _grand_jury_shots_block(hearing: dict) -> str:
+    out = ["THE SCREENSHOTS COURT"]
+    if not hearing["has_evidence"]:
+        out.append("  No Evidence")
+        out.append("  No screenshots were produced as evidence.")
+    else:
+        stats = hearing["stats"]
+        out.append(f"  {hearing['tier']}")
+        out.append(
+            f"  {stats['count']:,} screenshots, "
+            f"{stats['total_human']} of evidence,"
+        )
+        out.append(
+            f"  spanning {_fmt_date(stats['first_date'])} to "
+            f"{_fmt_date(stats['last_date'])}."
+        )
+        names = ", ".join(a["name"] for a in hearing["awards"])
+        out.append(f"  Awards: {names if names else 'none'}")
+        out.append(f"  {hearing['sentence']}")
+    if hearing["commentary"] is not None:
+        out.append(f"  COMMENTARY: {hearing['commentary']}")
+    return "\n".join(out)
+
+
+def _grand_jury_dl_block(hearing: dict) -> str:
+    out = ["THE DOWNLOADS DOCKET"]
+    if not hearing["has_evidence"]:
+        out.append("  No Evidence")
+        out.append("  No files were produced as evidence.")
+    else:
+        stats = hearing["stats"]
+        out.append(f"  {hearing['tier']}")
+        out.append(
+            f"  {stats['count']:,} files, "
+            f"{stats['total_human']} of evidence,"
+        )
+        out.append(
+            f"  spanning {_fmt_date(stats['first_date'])} to "
+            f"{_fmt_date(stats['last_date'])}."
+        )
+        names = ", ".join(a["name"] for a in hearing["awards"])
+        out.append(f"  Awards: {names if names else 'none'}")
+        out.append(f"  {hearing['sentence']}")
+    if hearing["commentary"] is not None:
+        out.append(f"  COMMENTARY: {hearing['commentary']}")
+    return "\n".join(out)
+
+
+def render_grand_jury_report(shots_h: dict, dl_h: dict, standing: str,
+                             voice: str = "fair") -> str:
+    out = [
+        "=" * 62,
+        "SNAP JUDGMENT - THE GRAND JURY",
+    ]
+    if voice != "fair":
+        out.append(f"Presiding: {JUDGE_NAMES[voice]}")
+    out += ["=" * 62, ""]
+    intro = JUDGE_INTROS.get(voice)
+    if intro:
+        out.append(
+            f"  {_format_intro(intro, shots_h['tier'], shots_h['count'])}"
+        )
+        out.append("")
+    combined = _grand_jury_combined(shots_h, dl_h)
+    out.append(_grand_jury_shots_block(shots_h))
+    out.append("")
+    out.append(_grand_jury_dl_block(dl_h))
+    out.append("")
+    out.append("THE FULL DOCKET")
+    for label, value in [
+        ("Combined files", f"{combined['files']:,}"),
+        ("Combined size",
+         f"{combined['human']} ({combined['bytes']:,} bytes)"),
+        ("Screenshots verdict", shots_h["tier"]),
+        ("Downloads verdict", dl_h["tier"]),
+    ]:
+        out.append(f"  {label:<30} {value}")
+    out += ["", f"  {standing}", ""]
+    return "\n".join(out)
+
+
+def render_grand_jury_markdown(shots_h: dict, dl_h: dict,
+                               standing: str) -> str:
+    out = ["# Snap Judgment - The Grand Jury", ""]
+    out += ["## The Screenshots Court", ""]
+    if shots_h["has_evidence"]:
+        stats = shots_h["stats"]
+        out.append(
+            f"**{shots_h['tier']}** - {stats['count']:,} screenshots, "
+            f"{stats['total_human']} of evidence, spanning "
+            f"{_fmt_date(stats['first_date'])} to "
+            f"{_fmt_date(stats['last_date'])}."
+        )
+        names = ", ".join(a["name"] for a in shots_h["awards"])
+        out += ["", f"Awards: {names if names else 'none'}",
+                "", shots_h["sentence"]]
+    else:
+        out.append(
+            "**No Evidence** - no screenshots were produced as evidence."
+        )
+    if shots_h["commentary"] is not None:
+        out += ["", f"Commentary: {shots_h['commentary']}"]
+    out += ["", "## The Downloads Docket", ""]
+    if dl_h["has_evidence"]:
+        stats = dl_h["stats"]
+        out.append(
+            f"**{dl_h['tier']}** - {stats['count']:,} files, "
+            f"{stats['total_human']} of evidence, spanning "
+            f"{_fmt_date(stats['first_date'])} to "
+            f"{_fmt_date(stats['last_date'])}."
+        )
+        names = ", ".join(a["name"] for a in dl_h["awards"])
+        out += ["", f"Awards: {names if names else 'none'}",
+                "", dl_h["sentence"]]
+    else:
+        out.append("**No Evidence** - no files were produced as evidence.")
+    if dl_h["commentary"] is not None:
+        out += ["", f"Commentary: {dl_h['commentary']}"]
+    combined = _grand_jury_combined(shots_h, dl_h)
+    out += [
+        "",
+        "## The Full Docket",
+        "",
+        f"- **Combined files:** {combined['files']:,}",
+        f"- **Combined size:** {combined['human']} "
+        f"({combined['bytes']:,} bytes)",
+        f"- **Screenshots verdict:** {shots_h['tier']}",
+        f"- **Downloads verdict:** {dl_h['tier']}",
+        "",
+        standing,
+        "",
+        "Judged from file metadata only. No pixels were read, "
+        "and no file was opened.",
+        "",
+    ]
+    return "\n".join(out)
+
+
+def render_grand_jury_card(shots_h: dict, dl_h: dict,
+                           standing: str) -> str:
+    """The FULL DOCKET HTML share card: both verdicts, the combined
+    evidence, one award from each court."""
+    esc = html.escape
+    combined = _grand_jury_combined(shots_h, dl_h)
+    award_names = _grand_jury_card_awards(shots_h, dl_h)
+    if award_names:
+        awards_html = "\n".join(
+            f"        <li><strong>{esc(name)}</strong></li>"
+            for name in award_names
+        )
+    else:
+        awards_html = (
+            "        <li>None. The court is as surprised as you are.</li>"
+        )
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Snap Judgment - The Full Docket</title>
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ background: #0d0d12; color: #e8e3d8; font-family: Georgia, 'Times New Roman', serif;
+         display: flex; justify-content: center; padding: 40px 16px; }}
+  .card {{ max-width: 640px; width: 100%; background: #16161f; border: 2px solid #b08d3c;
+          border-radius: 10px; padding: 36px 40px; box-shadow: 0 12px 40px rgba(0,0,0,.6); }}
+  .court {{ text-align: center; letter-spacing: 3px; font-size: 12px; color: #b08d3c;
+           text-transform: uppercase; }}
+  h1 {{ text-align: center; font-size: 30px; margin: 10px 0 4px; }}
+  .tier {{ text-align: center; font-size: 22px; color: #d4af5a; margin: 10px 0 0; }}
+  .summary {{ text-align: center; color: #cfc9ba; margin-bottom: 8px; }}
+  .headline {{ display: flex; justify-content: space-around; text-align: center;
+              border-top: 1px solid #33333f; border-bottom: 1px solid #33333f;
+              padding: 16px 0; margin: 18px 0; }}
+  .headline .num {{ font-size: 26px; color: #fff; }}
+  .headline .lbl {{ font-size: 11px; letter-spacing: 2px; color: #9a94a6; text-transform: uppercase; }}
+  h2 {{ font-size: 13px; letter-spacing: 2px; color: #b08d3c; text-transform: uppercase; margin-bottom: 8px; }}
+  ul {{ list-style: none; margin-bottom: 18px; }}
+  li {{ padding: 4px 0; font-size: 14px; }}
+  .sentence {{ font-style: italic; color: #cfc9ba; border-top: 1px solid #33333f; padding-top: 14px; }}
+  .foot {{ text-align: center; font-size: 11px; color: #6d6878; margin-top: 16px; }}
+  .install {{ text-align: center; font-size: 10px; color: #6d6878; margin-top: 4px;
+             font-family: 'Courier New', monospace; }}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="court">The Full Docket</div>
+    <h1>Snap Judgment</h1>
+    <div class="tier">{esc(shots_h['tier'])}</div>
+    <div class="summary">{shots_h['count']:,} screenshots</div>
+    <div class="tier">{esc(dl_h['tier'])}</div>
+    <div class="summary">{dl_h['count']:,} files</div>
+    <div class="headline">
+      <div><div class="num">{combined['files']:,}</div><div class="lbl">Files combined</div></div>
+      <div><div class="num">{esc(combined['human'])}</div><div class="lbl">Of evidence</div></div>
+    </div>
+    <h2>Awards</h2>
+    <ul>
+{awards_html}
+    </ul>
+    <div class="sentence">{esc(standing)}</div>
+    <div class="foot">Judged from file metadata only. No pixels were read, and no file was opened. Snap Judgment, Ghost Developer Studio.</div>
+    <div class="install">pip install snap-judgment</div>
+  </div>
+</body>
+</html>
+"""
+
+
+def render_grand_jury_svg(shots_h: dict, dl_h: dict,
+                          standing: str) -> str:
+    """The FULL DOCKET 1200x630 SVG share card."""
+    esc = _xml_escape
+    combined = _grand_jury_combined(shots_h, dl_h)
+    award_names = "  ·  ".join(_grand_jury_card_awards(shots_h, dl_h))
+    if not award_names:
+        award_names = "None. The court is as surprised as you are."
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630" role="img" aria-label="Snap Judgment verdict card">
+  <rect width="1200" height="630" fill="#0d0d12"/>
+  <rect x="24" y="24" width="1152" height="582" rx="14" fill="#16161f" stroke="#b08d3c" stroke-width="3"/>
+  <text x="600" y="92" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="19" letter-spacing="6" fill="#b08d3c">SNAP JUDGMENT - THE FULL DOCKET</text>
+  <text x="600" y="158" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="58" font-weight="bold" fill="#e8e3d8">SNAP JUDGMENT</text>
+  <text x="600" y="222" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="38" fill="#d4af5a">{esc(shots_h['tier'])}</text>
+  <text x="600" y="256" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="20" fill="#e8e3d8">{shots_h['count']:,} screenshots</text>
+  <text x="600" y="316" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="38" fill="#d4af5a">{esc(dl_h['tier'])}</text>
+  <text x="600" y="350" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="20" fill="#e8e3d8">{dl_h['count']:,} files</text>
+  <line x1="200" y1="384" x2="1000" y2="384" stroke="#33333f" stroke-width="1"/>
+  <text x="600" y="436" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="30" fill="#ffffff">{combined['files']:,} files - {esc(combined['human'])} combined</text>
+  <text x="600" y="486" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="14" letter-spacing="4" fill="#b08d3c">AWARDS</text>
+  <text x="600" y="520" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="24" fill="#e8e3d8">{esc(award_names)}</text>
+  <text x="600" y="566" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="15" fill="#6d6878">Judged from file metadata only. No pixels were read, and no file was opened.</text>
+  <text x="600" y="592" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="13" letter-spacing="1" fill="#6d6878">pip install snap-judgment</text>
+</svg>
+"""
+
+
+def render_grand_jury_png(shots_h: dict, dl_h: dict,
+                          standing: str) -> bytes:
+    """The FULL DOCKET 1200x630 PNG share card, drawn with the
+    bitmap font."""
+    canvas = _Canvas(1200, 630, (16, 16, 20))
+    canvas.rect(24, 24, 1176, 606, (22, 22, 31))
+    canvas.border(24, 24, 1176, 606, (176, 141, 60), 3)
+    accent = (176, 141, 60)
+    gold = (212, 175, 90)
+    paper = (232, 227, 216)
+    faint = (109, 104, 120)
+    canvas.text(600, 62, "SNAP JUDGMENT - THE FULL DOCKET", 2, accent)
+    canvas.text(600, 104, "SNAP JUDGMENT", 7, paper)
+    shots_line = (
+        f"{shots_h['tier']} - {shots_h['count']:,} screenshots"
+    )
+    canvas.text(600, 176, shots_line,
+                _fit_scale(shots_line, 1080, 4), gold)
+    dl_line = f"{dl_h['tier']} - {dl_h['count']:,} files"
+    canvas.text(600, 232, dl_line, _fit_scale(dl_line, 1080, 4), gold)
+    canvas.rect(200, 268, 1000, 270, (51, 51, 63))
+    combined = _grand_jury_combined(shots_h, dl_h)
+    combined_line = (
+        f"{combined['files']:,} files - {combined['human']} combined"
+    )
+    canvas.text(600, 300, combined_line,
+                _fit_scale(combined_line, 1080, 3), paper)
+    names = _grand_jury_card_awards(shots_h, dl_h)
+    awards_line = "Awards: " + (", ".join(names) if names else "none")
+    canvas.text(600, 356, awards_line,
+                _fit_scale(awards_line, 1080, 2), paper)
+    canvas.text(600, 440, standing, _fit_scale(standing, 1080, 2),
+                (207, 201, 186))
+    canvas.text(
+        600, 566,
+        "Judged from file metadata only. No pixels were read; "
+        "no file was opened.",
+        2, faint,
+    )
+    canvas.text(600, 590, "pip install snap-judgment", 1, faint)
+    return canvas.to_png()
+
+
+def _run_grand_jury(args) -> int:
+    """One hearing, both courts. Returns the exit code.
+
+    With two positional folders the first is tried by the
+    screenshots court and the second by the downloads docket; with
+    none, the screenshots court looks in the usual places and the
+    docket sits on ~/Downloads. A court whose folder is missing or
+    holds no evidence reports No Evidence and the combined report
+    still issues for the other.
+    """
+    voice = args.judge
+
+    intensity = None
+    if args.intensity is not None:
+        try:
+            intensity = parse_intensity(args.intensity)
+        except SnapError as exc:
+            print(f"snapjudgment: {exc}", file=sys.stderr)
+            return 2
+
+    shots_fail_rank = None
+    dl_fail_rank = None
+    if args.fail_above is not None:
+        fail_key = _normalize_tier_name(args.fail_above)
+        if fail_key in TIER_RANKS:
+            shots_fail_rank = TIER_RANKS[fail_key]
+        if fail_key in DL_TIER_RANKS:
+            dl_fail_rank = DL_TIER_RANKS[fail_key]
+        if shots_fail_rank is None and dl_fail_rank is None:
+            print(
+                f"snapjudgment: unknown verdict tier for --fail-above: "
+                f"{args.fail_above!r}; valid tiers: "
+                f"{', '.join(TIER_ORDER + DL_TIER_ORDER)}",
+                file=sys.stderr,
+            )
+            return 2
+
+    if len(args.folders) not in (0, 2):
+        print(
+            "snapjudgment: --grand-jury needs both folders or none: "
+            "pass the screenshots folder and the downloads folder, "
+            "or pass neither and let the court look in the usual "
+            "places",
+            file=sys.stderr,
+        )
+        return 2
+
+    prefound = None
+    if len(args.folders) == 2:
+        shots_folder = Path(args.folders[0]).expanduser()
+        dl_folder = Path(args.folders[1]).expanduser()
+    else:
+        dl_folder = Path.home() / "Downloads"
+        shots_folder = None
+        for candidate in default_candidates():
+            if not candidate.is_dir():
+                continue
+            if shots_folder is None:
+                shots_folder = candidate
+            box = [0]
+            found_shots, found_recordings = collect(
+                [candidate], all_images=args.all, skipped=box
+            )
+            if found_shots:
+                shots_folder = candidate
+                prefound = (found_shots, found_recordings, box[0])
+                break
+
+    shots_h = _hear_screenshots(
+        shots_folder, voice, intensity,
+        all_images=args.all, prefound=prefound,
+    )
+    dl_h = _hear_downloads(
+        dl_folder, voice, intensity, recursive=args.recursive
+    )
+    standing = grand_jury_standing(voice, shots_h["tier"], dl_h["tier"])
+    combined = _grand_jury_combined(shots_h, dl_h)
+
+    if args.card:
+        Path(args.card).write_text(
+            render_grand_jury_card(shots_h, dl_h, standing),
+            encoding="utf-8",
+        )
+    if args.svg:
+        Path(args.svg).write_text(
+            render_grand_jury_svg(shots_h, dl_h, standing),
+            encoding="utf-8",
+        )
+    if args.png:
+        Path(args.png).write_bytes(
+            render_grand_jury_png(shots_h, dl_h, standing)
+        )
+    if args.out:
+        Path(args.out).write_text(
+            render_grand_jury_markdown(shots_h, dl_h, standing),
+            encoding="utf-8",
+        )
+
+    if args.json:
+        data = {
+            "grand_jury": True,
+            "screenshots": _grand_jury_screenshots_json(shots_h, voice),
+            "downloads": _grand_jury_downloads_json(dl_h, voice),
+            "combined": {
+                "files": combined["files"],
+                "bytes": combined["bytes"],
+                "screenshots_tier": shots_h["tier"],
+                "downloads_tier": dl_h["tier"],
+            },
+        }
+        print(json.dumps(data, indent=2))
+    else:
+        if args.oneline:
+            if shots_h["has_evidence"]:
+                print(oneline_summary(shots_h["stats"], shots_h["tier"]))
+            else:
+                print("No Evidence · 0 screenshots")
+            if dl_h["has_evidence"]:
+                print(downloads_oneline(dl_h["stats"], dl_h["tier"]))
+            else:
+                print("No Evidence · 0 files")
+            print(
+                f"Full Docket · {combined['files']:,} files · "
+                f"{combined['human']}"
+            )
+        else:
+            print(render_grand_jury_report(shots_h, dl_h, standing,
+                                           voice=voice))
+        timestamp = datetime.now().isoformat(timespec="seconds")
+        append_history({
+            "timestamp": timestamp,
+            "folders": [shots_h["folder"]] if shots_h["folder"] else [],
+            "count": shots_h["count"],
+            "total_bytes": shots_h["total_bytes"],
+            "verdict": shots_h["tier"],
+            "judge": voice,
+        })
+        append_history({
+            "timestamp": timestamp,
+            "folders": [dl_h["folder"]] if dl_h["folder"] else [],
+            "count": dl_h["count"],
+            "total_bytes": dl_h["total_bytes"],
+            "verdict": dl_h["tier"],
+            "judge": voice,
+            "court": "downloads",
+        })
+
+    if not shots_h["has_evidence"] and not dl_h["has_evidence"]:
+        return 2
+    tripped = False
+    if (
+        shots_fail_rank is not None
+        and shots_h["has_evidence"]
+        and tier_rank(shots_h["tier"]) > shots_fail_rank
+    ):
+        tripped = True
+    if (
+        dl_fail_rank is not None
+        and dl_h["has_evidence"]
+        and dl_tier_rank(dl_h["tier"]) > dl_fail_rank
+    ):
+        tripped = True
+    return 1 if tripped else 0
+
+
 def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.grand_jury:
+        # The grand jury is one combined hearing; options that belong
+        # to a single court's procedure do not combine with it.
+        refused = [
+            ("--vs", args.vs is not None),
+            ("--vs-year", args.vs_year is not None),
+            ("--rematch", bool(args.rematch)),
+            ("--plea-bargain", bool(args.plea_bargain)),
+            ("--cleanup-list", args.cleanup_list is not None),
+            ("--wrapped-kit", args.wrapped_kit is not None),
+            ("--year", args.year is not None),
+            ("--since", args.since is not None),
+            ("--until", args.until is not None),
+            ("--history", bool(args.history)),
+            ("--judge-file", args.judge_file is not None),
+            ("--csv", args.csv is not None),
+            ("--badge", args.badge is not None),
+            ("--html", args.html is not None),
+        ]
+        for flag, present in refused:
+            if present:
+                print(
+                    f"snapjudgment: {flag} is not supported "
+                    f"with --grand-jury",
+                    file=sys.stderr,
+                )
+                return 2
 
     if args.history:
         records = read_history()
@@ -4354,6 +5217,9 @@ def main(argv=None) -> int:
 
     explicit = explicitly_set(sys.argv[1:] if argv is None else argv)
     apply_config(args, explicit)
+
+    if args.grand_jury:
+        return _run_grand_jury(args)
 
     if args.court == "downloads":
         return _run_downloads_court(args)

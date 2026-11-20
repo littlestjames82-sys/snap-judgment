@@ -3172,7 +3172,6 @@ class DownloadsCourtTests(TempDirCase):
         for flag, value in (("--vs", str(self.root)),
                             ("--vs-year", "2025"),
                             ("--plea-bargain", None),
-                            ("--cleanup-list", "x.txt"),
                             ("--judge-file", "pack.json")):
             argv = [str(self.root), "--court", "downloads", flag]
             if value is not None:
@@ -4392,6 +4391,484 @@ class IntensityTests(TempDirCase):
              "--fail-above", "Habitual Hoarder"]
         )
         self.assertEqual(code, 0)
+
+
+# ---------------------------------------------------------------------------
+# the grand jury (v0.11.0): both courts, one hearing
+# ---------------------------------------------------------------------------
+
+class GrandJuryTests(TempDirCase):
+    def setUp(self):
+        super().setUp()
+        self.hist_file = self.root / "court" / "history.jsonl"
+        patcher = mock.patch.object(
+            sj, "history_path", return_value=self.hist_file
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.shots_dir = self.root / "shots"
+        self.shots_dir.mkdir()
+        self.dl_dir = self.root / "downloads"
+        self.dl_dir.mkdir()
+
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = sj.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def seed_shots(self, n, start=datetime(2026, 6, 1, 12, 0)):
+        for i in range(n):
+            write_file(self.shots_dir, f"screenshot_{i:03d}.png",
+                       make_png(100, 100),
+                       start + timedelta(days=i % 28))
+
+    def seed_dl(self, n, size=1000, start=datetime(2026, 6, 1, 12, 0)):
+        for i in range(n):
+            write_sized(self.dl_dir, f"file_{i:04d}.dat", size,
+                        start + timedelta(days=i % 28))
+
+    def grand_jury(self, *extra):
+        return self.run_main(
+            ["--grand-jury", str(self.shots_dir), str(self.dl_dir),
+             *extra]
+        )
+
+    # -- the combined hearing -------------------------------------------
+
+    def test_happy_path_low_low(self):
+        self.seed_shots(3)
+        self.seed_dl(3)
+        code, out, _ = self.grand_jury()
+        self.assertEqual(code, 0)
+        self.assertIn("SNAP JUDGMENT - THE GRAND JURY", out)
+        self.assertIn("THE SCREENSHOTS COURT", out)
+        self.assertIn("Innocent Bystander", out)
+        self.assertIn("THE DOWNLOADS DOCKET", out)
+        self.assertIn("Tidy Desk", out)
+        self.assertIn("THE FULL DOCKET", out)
+        self.assertIn("Combined files", out)
+        # both courts in their bottom two tiers: the acquittal line
+        self.assertIn("little to prosecute", out)
+
+    def test_mixed_pair_names_the_worse_folder(self):
+        self.seed_shots(3)          # Innocent Bystander, rank 0
+        self.seed_dl(120)           # Digital Junk Drawer, rank 2
+        code, out, _ = self.grand_jury()
+        self.assertEqual(code, 0)
+        self.assertIn("Digital Junk Drawer", out)
+        self.assertIn("the downloads folder", out)
+        self.assertIn("verdict is split", out)
+
+    def test_standing_lines_for_every_voice_and_class(self):
+        pairs = {
+            "low": ("Innocent Bystander", "Mild Clutter"),
+            "mixed": ("Repeat Offender", "Mild Clutter"),
+            "high": ("Felony-Level Archivist", "Hoarding Situation"),
+        }
+        for voice in ("strict", "fair", "lenient"):
+            for pair_class, (shots_tier, dl_tier) in pairs.items():
+                with self.subTest(voice=voice, pair_class=pair_class):
+                    line = sj.grand_jury_standing(
+                        voice, shots_tier, dl_tier
+                    )
+                    self.assertTrue(line)
+                    self.assertNotIn("—", line)  # no em dashes
+                    self.assertNotIn("{worse}", line)
+        # the mixed line names the worse folder (screenshots here)
+        line = sj.grand_jury_standing(
+            "fair", "Repeat Offender", "Mild Clutter"
+        )
+        self.assertIn("the screenshots folder", line)
+        # both courts in their top two tiers: the harshest class
+        line = sj.grand_jury_standing(
+            "fair", "Felony-Level Archivist", "Hoarding Situation"
+        )
+        self.assertIn("two crime scenes", line)
+
+    def test_strict_judge_presides(self):
+        self.seed_shots(3)
+        self.seed_dl(3)
+        code, out, _ = self.grand_jury("--judge", "strict")
+        self.assertEqual(code, 0)
+        self.assertIn("Presiding: The Hanging Judge", out)
+        self.assertIn("remain under observation", out)
+
+    def test_intensity_commentary_in_both_blocks(self):
+        base = datetime(2026, 6, 1, 23, 30)
+        for i in range(6):
+            write_file(self.shots_dir, f"screenshot_{i}.png",
+                       make_png(100, 100), base + timedelta(days=i))
+        for i in range(12):
+            write_sized(self.dl_dir, f"tool{i}.exe", 100,
+                        datetime(2026, 6, 1, 12, 0))
+        code, out, _ = self.grand_jury("--intensity", "roast")
+        self.assertEqual(code, 0)
+        self.assertEqual(out.count("COMMENTARY:"), 2)
+        self.assertIn("sleep schedule", out)       # screenshots court
+        self.assertIn("every key to every door", out)  # downloads docket
+
+    # -- folder resolution ------------------------------------------------
+
+    def test_auto_detect_with_no_positionals(self):
+        shots = self.root / "Pictures" / "Screenshots"
+        for i in range(3):
+            write_file(shots, f"screenshot_{i}.png", make_png(10, 10),
+                       datetime(2026, 6, 1, 12, 0))
+        downloads = self.root / "Downloads"
+        for i in range(3):
+            write_sized(downloads, f"f{i}.dat", 10,
+                        datetime(2026, 6, 1, 12, 0))
+        with mock.patch.object(sj.Path, "home", return_value=self.root):
+            code, out, _ = self.run_main(["--grand-jury"])
+        self.assertEqual(code, 0)
+        self.assertIn("Innocent Bystander", out)
+        self.assertIn("Tidy Desk", out)
+
+    def test_one_positional_is_an_error(self):
+        code, _, err = self.run_main(
+            ["--grand-jury", str(self.shots_dir)]
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("--grand-jury", err)
+        self.assertIn("both folders or none", err)
+
+    def test_neither_court_with_evidence_exits_2(self):
+        code, out, _ = self.grand_jury()
+        self.assertEqual(code, 2)
+        self.assertIn("THE FULL DOCKET", out)
+        self.assertIn("No screenshots were produced as evidence.", out)
+        self.assertIn("No files were produced as evidence.", out)
+        # each court's verdict line plus its FULL DOCKET row
+        self.assertEqual(out.count("No Evidence"), 4)
+
+    def test_one_court_with_evidence_exits_0(self):
+        self.seed_dl(30)  # Mild Clutter; the shots folder stays empty
+        code, out, _ = self.grand_jury()
+        self.assertEqual(code, 0)
+        self.assertIn("No Evidence", out)
+        self.assertIn("Mild Clutter", out)
+
+    def test_missing_folder_reports_no_evidence(self):
+        self.seed_dl(3)
+        missing = self.root / "no-such-folder"
+        code, out, _ = self.run_main(
+            ["--grand-jury", str(missing), str(self.dl_dir)]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("No Evidence", out)
+        self.assertIn("Tidy Desk", out)
+
+    # -- outputs -----------------------------------------------------------
+
+    def test_json_shape_and_combined_totals(self):
+        self.seed_shots(3)
+        self.seed_dl(30, size=2000)
+        code, out, _ = self.grand_jury("--json")
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertIs(data["grand_jury"], True)
+        self.assertEqual(data["screenshots"]["court"], "screenshots")
+        self.assertEqual(data["screenshots"]["verdict"],
+                         "Innocent Bystander")
+        self.assertEqual(data["downloads"]["court"], "downloads")
+        self.assertEqual(data["downloads"]["verdict"], "Mild Clutter")
+        combined = data["combined"]
+        self.assertEqual(
+            set(combined),
+            {"files", "bytes", "screenshots_tier", "downloads_tier"},
+        )
+        self.assertEqual(combined["files"], 33)
+        shots_bytes = data["screenshots"]["total_bytes"]
+        self.assertEqual(
+            combined["bytes"],
+            shots_bytes + data["downloads"]["total_bytes"],
+        )
+        self.assertEqual(combined["screenshots_tier"],
+                         "Innocent Bystander")
+        self.assertEqual(combined["downloads_tier"], "Mild Clutter")
+
+    def test_png_card_is_valid_and_deterministic(self):
+        self.seed_shots(3)
+        self.seed_dl(3)
+        first = self.root / "docket1.png"
+        second = self.root / "docket2.png"
+        code, _, _ = self.grand_jury("--png", str(first))
+        self.assertEqual(code, 0)
+        code, _, _ = self.grand_jury("--png", str(second))
+        self.assertEqual(code, 0)
+        blob = first.read_bytes()
+        self.assertTrue(blob.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertEqual(blob, second.read_bytes())
+
+    def test_svg_and_html_cards_name_the_full_docket(self):
+        self.seed_shots(3)
+        self.seed_dl(3)
+        svg = self.root / "docket.svg"
+        card = self.root / "docket.html"
+        code, _, _ = self.grand_jury(
+            "--svg", str(svg), "--card", str(card)
+        )
+        self.assertEqual(code, 0)
+        svg_text = svg.read_text(encoding="utf-8")
+        self.assertIn("SNAP JUDGMENT - THE FULL DOCKET", svg_text)
+        self.assertIn("Innocent Bystander", svg_text)
+        self.assertIn("Tidy Desk", svg_text)
+        self.assertIn("The Full Docket",
+                      card.read_text(encoding="utf-8"))
+
+    def test_markdown_mirrors_the_terminal_structure(self):
+        self.seed_shots(3)
+        self.seed_dl(3)
+        md = self.root / "docket.md"
+        code, _, _ = self.grand_jury("--out", str(md))
+        self.assertEqual(code, 0)
+        text = md.read_text(encoding="utf-8")
+        self.assertIn("# Snap Judgment - The Grand Jury", text)
+        self.assertIn("## The Screenshots Court", text)
+        self.assertIn("## The Downloads Docket", text)
+        self.assertIn("## The Full Docket", text)
+        self.assertIn("little to prosecute", text)
+
+    # -- fail-above and refusals ------------------------------------------
+
+    def test_fail_above_trips_on_the_worse_court(self):
+        self.seed_shots(3)          # Innocent Bystander, rank 0
+        self.seed_dl(120)           # Digital Junk Drawer, rank 2
+        code, _, _ = self.grand_jury("--fail-above", "Mild Clutter")
+        self.assertEqual(code, 1)   # the docket is above Mild Clutter
+        code, _, _ = self.grand_jury(
+            "--fail-above", "Digital Junk Drawer"
+        )
+        self.assertEqual(code, 0)
+        code, _, _ = self.grand_jury("--fail-above", "Petty Offender")
+        self.assertEqual(code, 0)   # screenshots rank 0 is not above 1
+        code, _, err = self.grand_jury("--fail-above", "Banana Court")
+        self.assertEqual(code, 2)   # a tier in neither ladder
+        self.assertIn("--fail-above", err)
+
+    def test_single_court_options_are_refused(self):
+        self.seed_shots(3)
+        self.seed_dl(3)
+        for flag, value in (("--vs", str(self.dl_dir)),
+                            ("--csv", "x.csv"),
+                            ("--history", None),
+                            ("--rematch", None),
+                            ("--judge-file", "pack.json")):
+            argv = ["--grand-jury", str(self.shots_dir),
+                    str(self.dl_dir), flag]
+            if value is not None:
+                argv.append(value)
+            with self.subTest(flag=flag):
+                code, _, err = self.run_main(argv)
+                self.assertEqual(code, 2)
+                self.assertIn(flag, err)
+                self.assertIn("--grand-jury", err)
+
+    # -- the court record ---------------------------------------------------
+
+    def test_history_gains_both_entries(self):
+        self.seed_shots(3)
+        self.seed_dl(30)
+        code, _, _ = self.grand_jury()
+        self.assertEqual(code, 0)
+        records = [
+            json.loads(line)
+            for line in self.hist_file.read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.strip()
+        ]
+        self.assertEqual(len(records), 2)
+        by_court = {r.get("court", "screenshots"): r for r in records}
+        self.assertEqual(
+            by_court["screenshots"]["folders"], [str(self.shots_dir)]
+        )
+        self.assertEqual(
+            by_court["screenshots"]["verdict"], "Innocent Bystander"
+        )
+        self.assertEqual(
+            by_court["downloads"]["folders"], [str(self.dl_dir)]
+        )
+        self.assertEqual(by_court["downloads"]["verdict"], "Mild Clutter")
+        # and each court's rematch still finds its own last hearing
+        code, out, _ = self.run_main(
+            [str(self.dl_dir), "--court", "downloads", "--rematch"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("Since your last hearing", out)
+        code, out, _ = self.run_main(
+            [str(self.shots_dir), "--rematch"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("REMATCH", out)
+
+
+# ---------------------------------------------------------------------------
+# the downloads cleanup order and recursive docket (v0.11.0)
+# ---------------------------------------------------------------------------
+
+class DownloadsCleanupRecursiveTests(TempDirCase):
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = sj.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def seed_chain(self):
+        base = datetime(2026, 6, 1, 12, 0)
+        specs = [
+            ("setup.exe", 500),
+            ("setup (1).exe", 500),
+            ("setup (2).exe", 700),
+            ("report.pdf", 300),
+            ("report copy.pdf", 300),
+            ("unique.txt", 100),
+        ]
+        for name, size in specs:
+            write_sized(self.root, name, size, base)
+
+    # -- the downloads cleanup order --------------------------------------
+
+    def test_cleanup_lists_only_the_extra_copies(self):
+        self.seed_chain()
+        target = self.root / "cleanup.txt"
+        code, _, _ = self.run_main(
+            [str(self.root), "--court", "downloads",
+             "--cleanup-list", str(target)]
+        )
+        self.assertEqual(code, 0)
+        lines = target.read_text(encoding="utf-8").splitlines()
+        header = [line for line in lines if line.startswith("#")]
+        paths = [line for line in lines if not line.startswith("#")]
+        self.assertTrue(header)
+        self.assertIn("3 files", header[1])
+        self.assertIn("1500 bytes", header[1])
+        expected = sorted(
+            str(self.root / name)
+            for name in ("setup (1).exe", "setup (2).exe",
+                         "report copy.pdf")
+        )
+        self.assertEqual(paths, expected)  # sorted, keepers excluded
+        self.assertNotIn(str(self.root / "setup.exe"), paths)
+        self.assertNotIn(str(self.root / "report.pdf"), paths)
+
+    def test_cleanup_terminal_line_and_json(self):
+        self.seed_chain()
+        target = self.root / "cleanup.txt"
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads",
+             "--cleanup-list", str(target)]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("CLEANUP ORDER: 3 files (", out)
+        self.assertIn(f"listed in {target}", out)
+        self.assertIn("The court does not swing the axe itself.", out)
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads",
+             "--cleanup-list", str(target), "--json"]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            json.loads(out)["cleanup_order"],
+            {"file": str(target), "count": 3, "bytes": 1500},
+        )
+
+    def test_cleanup_deletes_nothing(self):
+        self.seed_chain()
+        before = sorted(p.name for p in self.root.iterdir())
+        target = self.root / "cleanup.txt"
+        code, _, _ = self.run_main(
+            [str(self.root), "--court", "downloads",
+             "--cleanup-list", str(target)]
+        )
+        self.assertEqual(code, 0)
+        for name in before:
+            self.assertTrue((self.root / name).is_file(), name)
+
+    def test_cleanup_with_no_duplicates_orders_nothing(self):
+        base = datetime(2026, 6, 1, 12, 0)
+        for i in range(3):
+            write_sized(self.root, f"plain{i}.txt", 100, base)
+        target = self.root / "cleanup.txt"
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads",
+             "--cleanup-list", str(target)]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("CLEANUP ORDER: 0 files", out)
+        paths = [
+            line for line in target.read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if not line.startswith("#")
+        ]
+        self.assertEqual(paths, [])
+
+    # -- the recursive docket ----------------------------------------------
+
+    def seed_tree(self):
+        base = datetime(2026, 6, 1, 12, 0)
+        for i in range(3):
+            write_sized(self.root, f"top{i}.dat", 100, base)
+        sub = self.root / "sub"
+        for i in range(7):
+            write_sized(sub, f"inner{i}.dat", 100, base)
+        return sub
+
+    def test_recursive_collects_the_whole_tree(self):
+        sub = self.seed_tree()
+        files = sj.collect_downloads([self.root], recursive=True)
+        self.assertEqual(len(files), 10)
+        stats = sj.analyze_downloads(files, recursive=True)
+        self.assertEqual(stats["count"], 10)
+        self.assertEqual(
+            stats["folders"],
+            [{"path": str(sub), "count": 7},
+             {"path": str(self.root), "count": 3}],
+        )
+        # the default stays on the surface, with no breakdown
+        self.assertEqual(len(sj.collect_downloads([self.root])), 3)
+        plain = sj.analyze_downloads(sj.collect_downloads([self.root]))
+        self.assertNotIn("folders", plain)
+
+    def test_recursive_breakdown_reaches_terminal_and_json(self):
+        sub = self.seed_tree()
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads", "--recursive"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("Folders", out)
+        self.assertIn(str(sub), out)
+        code, out, _ = self.run_main(
+            [str(self.root), "--court", "downloads", "--recursive",
+             "--json"]
+        )
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual(data["count"], 10)
+        self.assertEqual(
+            data["folders"],
+            [{"path": str(sub), "count": 7},
+             {"path": str(self.root), "count": 3}],
+        )
+
+    def test_recursive_grouping_stays_within_each_folder(self):
+        base = datetime(2026, 6, 1, 12, 0)
+        write_sized(self.root, "setup.exe", 500, base)
+        sub = self.root / "sub"
+        write_sized(sub, "setup.exe", 500, base)
+        write_sized(sub, "setup (1).exe", 500, base)
+        files = sj.collect_downloads([self.root], recursive=True)
+        stats = sj.analyze_downloads(files, recursive=True)
+        # the subfolder chain is one group with one extra; the lone
+        # setup.exe on the surface is not part of any chain
+        self.assertEqual(stats["duplicate_groups"], 1)
+        self.assertEqual(stats["duplicate_extra"], 1)
+        self.assertEqual(
+            stats["duplicate_extra_paths"],
+            [str(sub / "setup (1).exe")],
+        )
 
 
 # ---------------------------------------------------------------------------

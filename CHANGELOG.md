@@ -4,6 +4,40 @@ All notable changes to Snap Judgment are recorded here. Versions are the
 tool's own; the record is the record. Every version below shipped on
 November 19, 2026 - it was that kind of day in court.
 
+## 0.11.0 - 2026-11-20
+
+- The Grand Jury: `--grand-jury` convenes both courts in one hearing.
+  Pass both folders (screenshots first, downloads second) or neither
+  (the screenshots court looks in the usual places, the docket sits
+  on `~/Downloads`); one folder alone is a plain error. Each court
+  issues its compact verdict block, and a FULL DOCKET section closes
+  the hearing with the combined file count and size, both verdicts,
+  and a standing line in the presiding judge's voice keyed to the
+  pair of severities: an acquittal for two tidy folders, the harshest
+  line for two crime scenes, and a split verdict naming the worse
+  folder in between. A court with a missing or empty folder reports
+  No Evidence and the combined report still issues (exit 2 only when
+  neither court has evidence). `--judge` and `--intensity` apply to
+  both courts, `--fail-above` is resolved per court against that
+  court's own ladder, `--json` nests both courts' usual objects
+  under a `combined` summary, `--png` / `--svg` / `--card` render a
+  FULL DOCKET share card, and `--out` mirrors the hearing in
+  Markdown. Both hearings enter the court record as normal entries,
+  so each court's rematch keeps working. Single-court procedure
+  (`--vs`, `--rematch`, the plea bargain, the cleanup order, the
+  wrapped kit, date scopes, `--history`, judge packs, `--csv`, the
+  badge, and the HTML report) is refused with a plain error.
+- The downloads cleanup order: `--cleanup-list` now works in the
+  downloads court too, listing only the provable waste, the
+  duplicate-download extra copies (every group member except the
+  keeper), in the same format as the screenshots court's order.
+  Nothing is ever deleted.
+- The recursive docket: `--recursive` lets the downloads court judge
+  subfolders too. The evidence gains a per-folder breakdown (also
+  the `folders` list in JSON), and duplicate-download grouping stays
+  within each containing folder, so a setup.exe in two different
+  folders is not a duplicate chain. The default stays on the surface.
+
 ## 0.10.0 - 2026-11-20
 
 - Full citizenship for the Downloads Docket. The docket now takes the
