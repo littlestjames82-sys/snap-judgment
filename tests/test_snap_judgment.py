@@ -3170,7 +3170,6 @@ class DownloadsCourtTests(TempDirCase):
     def test_unsupported_flags_error(self):
         self.seed(self.filler(3))
         for flag, value in (("--vs-year", "2025"),
-                            ("--plea-bargain", None),
                             ("--judge-file", "pack.json")):
             argv = [str(self.root), "--court", "downloads", flag]
             if value is not None:
@@ -6300,7 +6299,6 @@ class DownloadsParityTests(TempDirCase):
         folder = self.root / "dl"
         self.seed_plan_folder(folder)
         for flag, extra in [
-            ("--plea-bargain", ["--plea-bargain"]),
             ("--vs-year", ["--vs-year", "2025"]),
             ("--judge-file", ["--judge-file", "pack.json"]),
         ]:
@@ -6586,6 +6584,293 @@ class DownloadsParityTests(TempDirCase):
                 self.assertEqual(code, 2)
                 self.assertIn("not supported", err)
                 self.assertIn("--appeal", err)
+
+
+# ---------------------------------------------------------------------------
+# the downloads plea bargain (v0.16.0)
+# ---------------------------------------------------------------------------
+
+class DownloadsPleaTests(TempDirCase):
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = sj.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def seed_plea_docket(self, folder):
+        """29 files, verdict Mild Clutter. A recent three-copy
+        duplicate chain (2 extras), an old duplicate pair (both
+        old; the extra is counted as old, not as a duplicate),
+        four more old files, and 20 recent documents."""
+        write_sized(folder, "setup.exe", 5000,
+                    datetime(2026, 6, 1, 12, 0))
+        write_sized(folder, "setup (1).exe", 5000,
+                    datetime(2026, 6, 2, 12, 0))
+        write_sized(folder, "setup (2).exe", 5000,
+                    datetime(2026, 6, 3, 12, 0))
+        write_sized(folder, "relic.dat", 3000,
+                    datetime(2020, 1, 1, 12, 0))
+        write_sized(folder, "relic (1).dat", 3000,
+                    datetime(2020, 1, 2, 12, 0))
+        for i in range(4):
+            write_sized(folder, f"old_{i}.pdf", 1000,
+                        datetime(2021, 6, 1, 12, 0))
+        for i in range(20):
+            write_sized(folder, f"doc_{i:02d}.pdf", 1000,
+                        datetime(2026, 5, 1, 12, 0))
+
+    def plea_for(self, folder, years=2):
+        files = sj.collect_downloads([folder])
+        stats = sj.analyze_downloads(files)
+        return files, stats, sj.compute_downloads_plea_bargain(
+            files, stats, years
+        )
+
+    # -- the math ------------------------------------------------------
+
+    def test_dl_plea_exact_numbers(self):
+        folder = self.root / "dl"
+        self.seed_plea_docket(folder)
+        _files, _stats, plea = self.plea_for(folder)
+        self.assertEqual(plea["years"], 2)
+        self.assertEqual(plea["cutoff"], datetime(2024, 6, 3).date())
+        self.assertEqual(plea["old_removed"], 6)
+        self.assertEqual(plea["duplicate_removed"], 2)
+        self.assertEqual(plea["removed_count"], 8)
+        self.assertEqual(plea["removed_bytes"], 20000)
+        self.assertEqual(plea["removed_human"], "19.5 KB")
+        self.assertEqual(plea["remaining_count"], 21)
+        self.assertEqual(plea["projected_tier"], "Tidy Desk")
+        self.assertEqual(len(plea["removed_paths"]), 8)
+        self.assertEqual(
+            plea["removed_paths"], sorted(plea["removed_paths"])
+        )
+
+    def test_dl_plea_old_duplicate_counted_once_as_old(self):
+        folder = self.root / "dl"
+        self.seed_plea_docket(folder)
+        files, stats, plea = self.plea_for(folder)
+        # the docket counts three duplicate extras in total: the
+        # two recent setup copies and the old relic copy. The plea
+        # reaches the relic copy through its age, so it is entered
+        # as old and the duplicate column only carries the two
+        # recent extras - and no file is ever counted twice.
+        self.assertEqual(stats["duplicate_extra"], 3)
+        self.assertEqual(plea["old_removed"], 6)
+        self.assertEqual(plea["duplicate_removed"], 2)
+        self.assertEqual(
+            plea["removed_count"],
+            plea["old_removed"] + plea["duplicate_removed"],
+        )
+        self.assertEqual(len(set(plea["removed_paths"])), 8)
+        self.assertEqual(len(files), 29)
+
+    def test_dl_plea_years_zero(self):
+        folder = self.root / "dl"
+        self.seed_plea_docket(folder)
+        _files, _stats, plea = self.plea_for(folder, years=0)
+        # everything predates the newest file except the newest
+        # itself, which still goes as a duplicate extra
+        self.assertEqual(plea["removed_count"], 29)
+        self.assertEqual(plea["remaining_count"], 0)
+        self.assertEqual(plea["projected_tier"], "No Evidence")
+
+    def test_dl_plea_closing_accepted_and_standing(self):
+        folder = self.root / "dl"
+        self.seed_plea_docket(folder)
+        _files, _stats, plea = self.plea_for(folder)
+        self.assertEqual(
+            sj.downloads_plea_closing(plea, "Mild Clutter"),
+            "The court would accept this plea.",
+        )
+        self.assertEqual(
+            sj.downloads_plea_closing(plea, "Tidy Desk"),
+            "The court notes this plea changes nothing. "
+            "The verdict stands.",
+        )
+
+    # -- the hearing ---------------------------------------------------
+
+    def test_dl_plea_terminal_section(self):
+        folder = self.root / "dl"
+        self.seed_plea_docket(folder)
+        code, out, _ = self.run_main(
+            [str(folder), "--court", "downloads", "--plea-bargain"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("THE PLEA BARGAIN", out)
+        self.assertIn("6 files older than 2 years and 2 duplicate "
+                      "extras", out)
+        self.assertIn("The court would accept this plea.", out)
+
+    def test_dl_plea_changes_nothing_closing(self):
+        folder = self.root / "dl"
+        # 36 files, Mild Clutter; the plea removes 5 (3 old, 2
+        # duplicate extras) and 31 remain - still Mild Clutter.
+        write_sized(folder, "setup.exe", 5000,
+                    datetime(2026, 6, 1, 12, 0))
+        write_sized(folder, "setup (1).exe", 5000,
+                    datetime(2026, 6, 2, 12, 0))
+        write_sized(folder, "setup (2).exe", 5000,
+                    datetime(2026, 6, 3, 12, 0))
+        write_sized(folder, "oldtool.msi", 8000,
+                    datetime(2022, 1, 1, 12, 0))
+        write_sized(folder, "older.dmg", 9000,
+                    datetime(2021, 1, 1, 12, 0))
+        write_sized(folder, "ancient.pdf", 7000,
+                    datetime(2020, 1, 1, 12, 0))
+        for i in range(30):
+            write_sized(folder, f"doc_{i:02d}.pdf", 1000,
+                        datetime(2026, 5, 1, 12, 0))
+        code, out, _ = self.run_main(
+            [str(folder), "--court", "downloads", "--plea-bargain"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn(
+            "The court notes this plea changes nothing. "
+            "The verdict stands.", out,
+        )
+
+    def test_dl_plea_json_shape(self):
+        folder = self.root / "dl"
+        self.seed_plea_docket(folder)
+        code, out, _ = self.run_main(
+            [str(folder), "--court", "downloads", "--plea-bargain",
+             "--json"]
+        )
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual(data["version"], "0.16.0")
+        self.assertEqual(data["verdict"], "Mild Clutter")
+        plea = data["plea_bargain"]
+        self.assertEqual(
+            plea,
+            {
+                "years": 2,
+                "old_removed": 6,
+                "duplicate_removed": 2,
+                "removed_count": 8,
+                "removed_bytes": 20000,
+                "removed_human": "19.5 KB",
+                "remaining_count": 21,
+                "projected_tier": "Tidy Desk",
+            },
+        )
+
+    def test_dl_plea_absent_without_flag(self):
+        folder = self.root / "dl"
+        self.seed_plea_docket(folder)
+        code, out, _ = self.run_main(
+            [str(folder), "--court", "downloads", "--json"]
+        )
+        self.assertEqual(code, 0)
+        self.assertNotIn("plea_bargain", json.loads(out))
+
+    def test_dl_plea_markdown_section(self):
+        folder = self.root / "dl"
+        self.seed_plea_docket(folder)
+        md = self.root / "report.md"
+        code, _out, _ = self.run_main(
+            [str(folder), "--court", "downloads", "--plea-bargain",
+             "--out", str(md)]
+        )
+        self.assertEqual(code, 0)
+        text = md.read_text(encoding="utf-8")
+        self.assertIn("## The Plea Bargain", text)
+        self.assertIn("projected verdict of **Tidy Desk**", text)
+        self.assertIn("The court would accept this plea.", text)
+
+    def test_dl_plea_composes_with_judge_and_intensity(self):
+        folder = self.root / "dl"
+        self.seed_plea_docket(folder)
+        code, out, _ = self.run_main(
+            [str(folder), "--court", "downloads", "--plea-bargain",
+             "--judge", "strict", "--intensity", "honest"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("THE PLEA BARGAIN", out)
+
+    def test_dl_plea_composes_with_vs(self):
+        folder = self.root / "dl"
+        other = self.root / "other"
+        self.seed_plea_docket(folder)
+        self.seed_plea_docket(other)
+        code, out, _ = self.run_main(
+            [str(folder), "--court", "downloads", "--plea-bargain",
+             "--vs", str(other)]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("THE PLEA BARGAIN", out)
+
+    def test_dl_plea_single_file(self):
+        folder = self.root / "dl"
+        write_sized(folder, "only.dat", 1000,
+                    datetime(2026, 6, 1, 12, 0))
+        code, out, _ = self.run_main(
+            [str(folder), "--court", "downloads", "--plea-bargain"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("THE PLEA BARGAIN", out)
+        self.assertIn("The court notes this plea changes nothing.",
+                      out)
+
+    def test_dl_plea_empty_folder(self):
+        folder = self.root / "dl"
+        folder.mkdir()
+        code, out, _ = self.run_main(
+            [str(folder), "--court", "downloads", "--plea-bargain"]
+        )
+        self.assertEqual(code, 2)
+        self.assertNotIn("THE PLEA BARGAIN", out)
+        code, out, _ = self.run_main(
+            [str(folder), "--court", "downloads", "--plea-bargain",
+             "--json"]
+        )
+        self.assertEqual(code, 2)
+        self.assertNotIn("plea_bargain", json.loads(out))
+
+    def test_dl_plea_negative_years(self):
+        folder = self.root / "dl"
+        self.seed_plea_docket(folder)
+        code, _out, err = self.run_main(
+            [str(folder), "--court", "downloads", "--plea-bargain",
+             "--plea-years=-1"]
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("--plea-years", err)
+
+    def test_dl_plea_refused_combos(self):
+        folder = self.root / "dl"
+        self.seed_plea_docket(folder)
+        for extra in (["--rehab"], ["--appeal"], ["--trend"],
+                      ["--grand-jury"]):
+            with self.subTest(extra=extra):
+                code, _out, err = self.run_main(
+                    [str(folder), "--court", "downloads",
+                     "--plea-bargain"] + extra
+                )
+                self.assertEqual(code, 2)
+                self.assertIn("not supported", err)
+                self.assertIn("--plea-bargain", err)
+
+    def test_dl_cleanup_order_stays_duplicate_extras_only(self):
+        # The docket's cleanup order is a narrower instrument than
+        # the plea: it lists only the duplicate extras, the provable
+        # waste, even now that the plea itself is heard here.
+        folder = self.root / "dl"
+        self.seed_plea_docket(folder)
+        target = self.root / "cleanup.txt"
+        code, _out, _ = self.run_main(
+            [str(folder), "--court", "downloads",
+             "--cleanup-list", str(target)]
+        )
+        self.assertEqual(code, 0)
+        lines = target.read_text(encoding="utf-8").splitlines()
+        paths = [line for line in lines if not line.startswith("#")]
+        files = sj.collect_downloads([folder])
+        stats = sj.analyze_downloads(files)
+        self.assertEqual(paths, stats["duplicate_extra_paths"])
+        self.assertEqual(len(paths), 3)
 
 
 # ---------------------------------------------------------------------------

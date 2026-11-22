@@ -45,7 +45,7 @@ try:
 except ModuleNotFoundError:  # Python 3.9 and 3.10 have no tomllib
     tomllib = None
 
-__version__ = "0.15.0"
+__version__ = "0.16.0"
 
 # ---------------------------------------------------------------------------
 # detection
@@ -2394,7 +2394,8 @@ def render_downloads_markdown(stats: dict, tier: str, sentence: str,
                               versus: dict | None = None,
                               trend: dict | None = None,
                               rehab: dict | None = None,
-                              appeal: dict | None = None) -> str:
+                              appeal: dict | None = None,
+                              plea: dict | None = None) -> str:
     out = [
         "# Snap Judgment - The Downloads Docket",
         "",
@@ -2459,6 +2460,8 @@ def render_downloads_markdown(stats: dict, tier: str, sentence: str,
         out += render_downloads_rehabilitation_markdown(rehab, tier)
     if appeal is not None:
         out += render_downloads_appeal_markdown(appeal)
+    if plea is not None:
+        out += render_downloads_plea_markdown(plea, tier)
     out += [DL_FOOTER, ""]
     return "\n".join(out)
 
@@ -5079,6 +5082,127 @@ def render_downloads_appeal_markdown(appeal: dict) -> list[str]:
     return out
 
 
+def compute_downloads_plea_bargain(files: list, stats: dict,
+                                   plea_years: int,
+                                   voice: str = "fair") -> dict:
+    """The docket's plea bargain: what would happen IF the defendant
+    deleted (a) every duplicate-download extra copy (the same
+    provable waste the cleanup order lists, as computed by
+    analyze_downloads) and (b) every file older than `plea_years`
+    years, measured from the newest file's date. A file that is both
+    old and a duplicate extra is counted once, as old, exactly as
+    the screenshots court counts it. Nothing is deleted; this is
+    math, on the docket's own ladder."""
+    newest_date = max(f.dt.date() for f in files)
+    cutoff = _minus_years(newest_date, plea_years)
+    duplicate_paths = set(stats["duplicate_extra_paths"])
+
+    removed_old = 0
+    removed_duplicates = 0
+    removed_bytes = 0
+    removed_paths = []
+    for f in files:
+        is_old = f.dt.date() < cutoff
+        is_duplicate = f.path in duplicate_paths
+        if is_old:
+            removed_old += 1
+            removed_bytes += f.size
+            removed_paths.append(f.path)
+        elif is_duplicate:
+            removed_duplicates += 1
+            removed_bytes += f.size
+            removed_paths.append(f.path)
+    removed_count = removed_old + removed_duplicates
+    remaining = len(files) - removed_count
+    projected_tier, _sentence = downloads_verdict_for(
+        remaining, voice=voice
+    )
+    return {
+        "years": plea_years,
+        "cutoff": cutoff,
+        "old_removed": removed_old,
+        "duplicate_removed": removed_duplicates,
+        "removed_count": removed_count,
+        "removed_bytes": removed_bytes,
+        "removed_human": human_bytes(removed_bytes),
+        "removed_paths": sorted(removed_paths),
+        "remaining_count": remaining,
+        "projected_tier": projected_tier,
+    }
+
+
+def downloads_plea_closing(plea: dict, current_tier: str) -> str:
+    """The docket's ruling on its plea, in the screenshots plea
+    closing's words, judged on the docket's ladder."""
+    if dl_tier_rank(plea["projected_tier"]) < dl_tier_rank(
+        current_tier
+    ):
+        return "The court would accept this plea."
+    return (
+        "The court notes this plea changes nothing. "
+        "The verdict stands."
+    )
+
+
+def render_downloads_plea_bargain(plea: dict, current_tier: str) -> str:
+    """The terminal PLEA BARGAIN section printed by --plea-bargain
+    in the downloads court."""
+    out = [
+        "THE PLEA BARGAIN",
+        f"  If the defendant deleted {plea['old_removed']:,} files older "
+        f"than {plea['years']} year{'s' if plea['years'] != 1 else ''} and "
+        f"{plea['duplicate_removed']:,} duplicate extras - a purely "
+        f"hypothetical exercise; this court deletes nothing - then:",
+        f"  {'Files removed':<30} {plea['removed_count']:,}",
+        f"  {'Space reclaimed':<30} {plea['removed_human']} "
+        f"({plea['removed_bytes']:,} bytes)",
+        f"  {'Remaining evidence':<30} {plea['remaining_count']:,} files",
+        f"  {'Projected verdict':<30} {plea['projected_tier']}",
+        "",
+        f"  {downloads_plea_closing(plea, current_tier)}",
+        "",
+    ]
+    return "\n".join(out)
+
+
+def downloads_plea_json(plea: dict) -> dict:
+    """The docket's plea bargain as it appears in --json: the same
+    shape the screenshots court uses."""
+    return {
+        "years": plea["years"],
+        "old_removed": plea["old_removed"],
+        "duplicate_removed": plea["duplicate_removed"],
+        "removed_count": plea["removed_count"],
+        "removed_bytes": plea["removed_bytes"],
+        "removed_human": plea["removed_human"],
+        "remaining_count": plea["remaining_count"],
+        "projected_tier": plea["projected_tier"],
+    }
+
+
+def render_downloads_plea_markdown(plea: dict,
+                                   current_tier: str) -> list[str]:
+    """The '## The Plea Bargain' section lines for the docket's
+    --out report."""
+    return [
+        "## The Plea Bargain",
+        "",
+        f"If the defendant deleted {plea['old_removed']:,} files "
+        f"older than {plea['years']} "
+        f"year{'s' if plea['years'] != 1 else ''} and "
+        f"{plea['duplicate_removed']:,} duplicate extras - a purely "
+        f"hypothetical exercise; this court deletes nothing - then "
+        f"{plea['removed_count']:,} files would be removed, "
+        f"{plea['removed_human']} ({plea['removed_bytes']:,} bytes) "
+        f"reclaimed, and {plea['remaining_count']:,} files "
+        f"would remain, for a projected verdict of "
+        f"**{plea['projected_tier']}**.",
+        "",
+        downloads_plea_closing(plea, current_tier),
+        "",
+    ]
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -5414,11 +5538,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--plea-bargain", action="store_true",
                         dest="plea_bargain",
                         help="also compute the hypothetical verdict if "
-                             "duplicates and old screenshots were deleted "
+                             "duplicates and old files were deleted "
                              "(nothing is actually deleted)")
     parser.add_argument("--plea-years", metavar="N", dest="plea_years",
                         type=int, default=2,
-                        help="with --plea-bargain: screenshots older than "
+                        help="with --plea-bargain: files older than "
                              "this many years would go (default: 2)")
     parser.add_argument("--cleanup-list", metavar="FILE",
                         dest="cleanup_list",
@@ -5497,7 +5621,6 @@ def _run_downloads_court(args) -> int:
     """
     unsupported = [
         ("--vs-year", args.vs_year is not None),
-        ("--plea-bargain", bool(args.plea_bargain)),
         ("--judge-file", args.judge_file is not None),
     ]
     for flag, present in unsupported:
@@ -5508,6 +5631,13 @@ def _run_downloads_court(args) -> int:
                 file=sys.stderr,
             )
             return 2
+
+    if args.plea_years < 0:
+        print(
+            "snapjudgment: --plea-years must be 0 or more",
+            file=sys.stderr,
+        )
+        return 2
 
     intensity = None
     if args.intensity is not None:
@@ -5797,6 +5927,17 @@ def _run_downloads_court(args) -> int:
         # the docket's factors, ruled by the same stated rule.
         dl_appeal = compute_downloads_appeal(stats, tier, sentence)
 
+    dl_plea = None
+    if args.plea_bargain:
+        # The docket's own plea bargain: duplicate extras and files
+        # older than --plea-years, projected on the docket's ladder.
+        # Nothing is ever deleted. (The docket's cleanup order is a
+        # narrower instrument: it lists only the duplicate extras,
+        # the provable waste, and is not the plea.)
+        dl_plea = compute_downloads_plea_bargain(
+            files, stats, args.plea_years, voice=voice
+        )
+
     if args.card:
         Path(args.card).write_text(
             render_downloads_card(stats, tier, sentence, awards),
@@ -5832,7 +5973,7 @@ def _run_downloads_court(args) -> int:
                 commentary=commentary, year=year,
                 rematch=rematch, rematch_requested=args.rematch,
                 versus=versus, trend=trend,
-                rehab=dl_rehab, appeal=dl_appeal,
+                rehab=dl_rehab, appeal=dl_appeal, plea=dl_plea,
             ),
             encoding="utf-8",
         )
@@ -5883,6 +6024,8 @@ def _run_downloads_court(args) -> int:
             )
         if dl_appeal is not None:
             data["appeal"] = downloads_appeal_json(dl_appeal)
+        if dl_plea is not None:
+            data["plea_bargain"] = downloads_plea_json(dl_plea)
         if year is not None:
             data["year"] = year
         if cleanup is not None:
@@ -5934,6 +6077,8 @@ def _run_downloads_court(args) -> int:
                 print(render_downloads_rehabilitation(dl_rehab, tier))
             if dl_appeal is not None:
                 print(render_downloads_appeal(dl_appeal))
+            if dl_plea is not None:
+                print(render_downloads_plea_bargain(dl_plea, tier))
             if cleanup is not None:
                 print(
                     f"  CLEANUP ORDER: {cleanup['count']} files "

@@ -4,6 +4,35 @@ All notable changes to Snap Judgment are recorded here. Versions are the
 tool's own; the record is the record. Every version below shipped on
 November 19, 2026 - it was that kind of day in court.
 
+## 0.16.0 - 2026-11-22
+
+- Downloads parity for the plea bargain: `--plea-bargain` is now
+  heard in the downloads court, the last proceeding the docket
+  still refused. The docket's plea asks what would happen if the
+  defendant deleted (a) every duplicate-download extra copy, the
+  same provable waste the cleanup order lists, as computed by the
+  docket's own duplicate grouping, and (b) every file older than
+  `--plea-years` years (default 2), measured from the newest
+  file's date. A file that is both old and a duplicate extra is
+  counted once, as old, exactly as the screenshots court counts
+  it. The remainder is projected on the docket's own ladder, and
+  the court rules in the plea closing's words: it would accept
+  the plea when the projected verdict beats the real one, and
+  notes that the plea changes nothing when it does not. The plea
+  appears in the terminal report, as a `plea_bargain` object in
+  `--json` in the same shape the screenshots court uses, and as
+  a `## The Plea Bargain` section in the Markdown report, and it
+  composes with `--judge`, `--intensity`, and `--vs`. The
+  proceedings it refuses are the same ones the screenshots court
+  refuses (`--rehab`, `--appeal`, `--trend`, `--grand-jury`),
+  with the same plain errors, inherited from the shared refusal
+  blocks. The docket's cleanup order is unchanged: it remains
+  the narrower instrument, listing only the duplicate extras.
+  Nothing is deleted, moved, or modified. With this round the
+  docket hears every proceeding the screenshots court hears
+  except the co-defendant comparison by year and judge packs,
+  which stay refused.
+
 ## 0.15.0 - 2026-11-22
 
 - Downloads parity for the rehabilitation plan: `--rehab` is now

@@ -29,6 +29,10 @@ with a combined FULL DOCKET ruling: both verdicts, the combined evidence,
 and a standing line keyed to the pair. See [The grand jury](#the-grand-jury)
 below.
 
+New in v0.16.0:
+
+- Downloads parity for `--plea-bargain`: the Downloads Docket now hears the last proceeding it used to refuse. Its plea projects the verdict if you deleted the duplicate-download extra copies and every file older than `--plea-years` years (default 2), measured from the newest file, on the docket's own ladder. With this, the docket hears every proceeding the screenshots court hears except the co-defendant comparison by year and judge packs. See [The downloads docket](#the-downloads-docket) below.
+
 New in v0.15.0:
 
 - Downloads parity for `--rehab` and `--appeal`: the Downloads Docket now hears the two newest proceedings on its own evidence. Its rehabilitation plan clears duplicate extras, then ancient installers, then the heavy evidence, with projected verdicts on the docket's own ladder; its appeals court re-hears the verdict on docket factors (installer restraint and a light load against duplicate waste, installer pileups, ancient relics, archive hoards, gigabyte landfills, and time capsules) under the same three-factor rule. See [The downloads docket](#the-downloads-docket) below.
@@ -233,7 +237,11 @@ files would go, how much space would come back, and what verdict the
 remainder would earn. If the projected tier beats the real one, the court
 would accept the plea; if not, it notes for the record that the plea
 changes nothing. It is a projection, labeled as such - Snap Judgment
-never deletes, moves, or modifies anything it judges.
+never deletes, moves, or modifies anything it judges. The downloads
+docket hears its own plea bargain on the same terms: the duplicate
+extras the docket itself computes, plus every file older than
+`--plea-years` years measured from the newest file, projected on
+the docket's ladder.
 
 `--cleanup-list FILE` turns the plea into paperwork: it writes the
 exact files the plea bargain would remove (duplicate extras plus
@@ -382,8 +390,17 @@ duplicate waste (five or more extra copies), an installer pileup
 years old), an archive hoard (fifteen or more), a gigabyte
 landfill (5 GB or more), and a time capsule (60% or more over a
 year old), ruled by the same three-factor rule as the screenshots
-court, on the docket's ladder. Only the co-defendant comparison
-by year (`--vs-year`), the plea bargain, and judge packs
+court, on the docket's ladder. The plea bargain (`--plea-bargain`)
+is heard here too: the hypothetical verdict if the defendant
+deleted the duplicate-download extra copies and every file older
+than `--plea-years` years (default 2), measured from the newest
+file, with a file that is both old and a duplicate extra counted
+once, as old - projected on the docket's ladder, in the terminal
+report, as a `plea_bargain` object in `--json`, and as a section
+of the Markdown report. (The docket's cleanup order stays the
+narrower instrument it has always been: it lists only the
+duplicate extras, the provable waste, and is not the plea.) Only
+the co-defendant comparison by year (`--vs-year`) and judge packs
 (`--judge-file`) are refused with a plain error, because their
 evidence is not the docket's. A sample hearing is at
 `examples/downloads-demo-output.txt`. `--court` can also live in the
