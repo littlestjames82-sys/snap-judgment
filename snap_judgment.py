@@ -45,7 +45,7 @@ try:
 except ModuleNotFoundError:  # Python 3.9 and 3.10 have no tomllib
     tomllib = None
 
-__version__ = "0.13.0"
+__version__ = "0.14.0"
 
 # ---------------------------------------------------------------------------
 # detection
@@ -1620,6 +1620,270 @@ def render_rehabilitation_markdown(rehab: dict,
 
 
 # ---------------------------------------------------------------------------
+# the appeals court: the verdict, re-heard on its factors
+# ---------------------------------------------------------------------------
+
+APPEAL_REDUCTION_MARGIN = 3
+APPEAL_COMMUTATION_MARGIN = 1
+APPEAL_COMMUTED_SENTENCE = (
+    "Sentence on appeal: commuted to time served. The folder is "
+    "released on its own recognizance."
+)
+
+APPEAL_RULING_LABELS = {
+    "granted": "Appeal granted",
+    "commuted": "Sentence commuted",
+    "denied": "Appeal denied",
+}
+
+
+def compute_appeal(stats: dict, tier: str, sentence: str) -> dict:
+    """A re-hearing of the verdict on its factors. Every statistic
+    the trial court already computed is entered as a mitigating
+    factor (it argues for mercy) or an aggravating factor (it argues
+    against), each with its evidence, and the panel rules by a
+    stated rule, never by vibes:
+
+    - mitigating factors outnumber aggravating factors by
+      APPEAL_REDUCTION_MARGIN or more: the appeal is granted and
+      the verdict is reduced by exactly one rung on the ladder
+      (never below Innocent Bystander, where it stands and the
+      sentence is commuted instead);
+    - mitigating factors outnumber aggravating factors by at least
+      APPEAL_COMMUTATION_MARGIN: the verdict stands and the
+      sentence is commuted;
+    - otherwise: the appeal is denied and both stand.
+
+    The original verdict and sentence are always reported beside
+    the appealed ones: an appeal re-hears the case, it does not
+    rewrite the record."""
+    mitigating = []
+    aggravating = []
+
+    def factor(key, name, evidence):
+        return {"key": key, "name": name, "evidence": evidence}
+
+    if stats["night_share"] < 20:
+        mitigating.append(factor(
+            "daylight_record", "A daylight record",
+            f"Only {stats['night_share']:.1f}% of the screenshots "
+            f"were taken at night.",
+        ))
+    if stats["duplicate_files"] == 0:
+        mitigating.append(factor(
+            "no_duplicate_waste", "No duplicate waste",
+            "Not one duplicate suspect in the evidence.",
+        ))
+    if stats["longest_gap_days"] >= 60:
+        mitigating.append(factor(
+            "shows_restraint", "Shows restraint",
+            f"A {stats['longest_gap_days']:,}-day silence in the "
+            f"record: the defendant can stop.",
+        ))
+    if stats["median_per_active_day"] <= 2:
+        mitigating.append(factor(
+            "measured_pace", "A measured pace",
+            f"A median of {stats['median_per_active_day']:g} "
+            f"screenshots per active day.",
+        ))
+    if stats["retention_old_share"] < 10:
+        mitigating.append(factor(
+            "little_ancient_evidence", "Little ancient evidence",
+            f"Only {stats['retention_old_share']:.1f}% of the "
+            f"evidence is over a year old.",
+        ))
+
+    if stats["night_share"] >= 40:
+        aggravating.append(factor(
+            "night_habit", "A night habit",
+            f"{stats['night_share']:.1f}% of the screenshots were "
+            f"taken at night.",
+        ))
+    if stats["three_am_count"] >= 5:
+        aggravating.append(factor(
+            "three_am_activity", "3 AM activity",
+            f"{stats['three_am_count']:,} screenshots between "
+            f"2 and 4 AM.",
+        ))
+    if stats["duplicate_files"] >= 10:
+        aggravating.append(factor(
+            "duplicate_waste", "Duplicate waste",
+            f"{stats['duplicate_files']:,} duplicate suspects, "
+            f"{human_bytes(stats['duplicate_bytes_wasted'])} of "
+            f"wasted evidence.",
+        ))
+    if stats["burst_record"] >= 8:
+        aggravating.append(factor(
+            "burst_behavior", "Burst behavior",
+            f"{stats['burst_record']} screenshots inside a single "
+            f"60-second window.",
+        ))
+    if stats["longest_streak"] >= 14:
+        aggravating.append(factor(
+            "relentless_streak", "A relentless streak",
+            f"{stats['longest_streak']:,} consecutive days with "
+            f"at least one screenshot.",
+        ))
+    if stats["busiest_day_count"] >= 25:
+        aggravating.append(factor(
+            "single_day_haul", "A single-day haul",
+            f"{stats['busiest_day_count']:,} screenshots on "
+            f"{_fmt_date(stats['busiest_day'])} alone.",
+        ))
+
+    net = len(mitigating) - len(aggravating)
+    rank = tier_rank(tier)
+    if net >= APPEAL_REDUCTION_MARGIN:
+        ruling = "granted"
+        appealed_tier = TIER_ORDER[max(0, rank - 1)]
+        appealed_sentence = APPEAL_COMMUTED_SENTENCE
+    elif net >= APPEAL_COMMUTATION_MARGIN:
+        ruling = "commuted"
+        appealed_tier = tier
+        appealed_sentence = APPEAL_COMMUTED_SENTENCE
+    else:
+        ruling = "denied"
+        appealed_tier = tier
+        appealed_sentence = sentence
+    return {
+        "mitigating": mitigating,
+        "aggravating": aggravating,
+        "net": net,
+        "reduction_margin": APPEAL_REDUCTION_MARGIN,
+        "commutation_margin": APPEAL_COMMUTATION_MARGIN,
+        "ruling": ruling,
+        "original_tier": tier,
+        "original_sentence": sentence,
+        "appealed_tier": appealed_tier,
+        "appealed_sentence": appealed_sentence,
+    }
+
+
+def appeal_closing(appeal: dict) -> str:
+    """The panel's reasoning, stated with the counts it rests on."""
+    mitigating_count = len(appeal["mitigating"])
+    aggravating_count = len(appeal["aggravating"])
+    if appeal["ruling"] == "granted":
+        if appeal["appealed_tier"] != appeal["original_tier"]:
+            return (
+                f"Appeal granted. The mitigating factors outweighed "
+                f"the aggravating {mitigating_count} to "
+                f"{aggravating_count}, and under the "
+                f"{appeal['reduction_margin']}-factor rule the "
+                f"verdict is reduced on appeal from "
+                f"{appeal['original_tier']} to "
+                f"{appeal['appealed_tier']}. The original verdict "
+                f"stays in the court record."
+            )
+        return (
+            f"Appeal granted. The mitigating factors outweighed "
+            f"the aggravating {mitigating_count} to "
+            f"{aggravating_count}, but the verdict is already the "
+            f"lowest on the ladder, so it stands at "
+            f"{appeal['original_tier']} and the sentence is "
+            f"commuted instead."
+        )
+    if appeal["ruling"] == "commuted":
+        return (
+            f"Appeal heard. The mitigating factors outweighed the "
+            f"aggravating {mitigating_count} to "
+            f"{aggravating_count}: not enough for a reduction "
+            f"under the {appeal['reduction_margin']}-factor rule, "
+            f"but enough to commute the sentence. The verdict "
+            f"stands at {appeal['original_tier']}."
+        )
+    return (
+        f"Appeal denied. The aggravating factors matched or "
+        f"outweighed the mitigating, {aggravating_count} to "
+        f"{mitigating_count}. The verdict and the sentence stand."
+    )
+
+
+def render_appeal(appeal: dict) -> str:
+    """The terminal APPEALS COURT section printed by --appeal."""
+    out = [
+        "THE APPEALS COURT",
+        "  The court re-hears the verdict on its factors. Mitigating",
+        "  factors argue for mercy; aggravating factors argue",
+        f"  against. Under the {appeal['reduction_margin']}-factor "
+        "rule, mitigating",
+        "  factors must outnumber aggravating factors by that many",
+        "  to reduce the verdict by one rung; outnumbering them at",
+        "  all commutes the sentence.",
+    ]
+    for kind in ("mitigating", "aggravating"):
+        factors = appeal[kind]
+        out.append(f"  {kind.capitalize()} factors ({len(factors)})")
+        if not factors:
+            out.append("    - none entered")
+        for entry in factors:
+            out.append(f"    - {entry['name']}: {entry['evidence']}")
+    out += [
+        f"  {'Original verdict':<30} {appeal['original_tier']}",
+        f"  {'Ruling':<30} "
+        f"{APPEAL_RULING_LABELS[appeal['ruling']]}",
+        f"  {'Verdict on appeal':<30} {appeal['appealed_tier']}",
+        f"  {'Sentence on appeal':<30} "
+        f"{appeal['appealed_sentence']}",
+        "",
+        f"  {appeal_closing(appeal)}",
+        "",
+    ]
+    return "\n".join(out)
+
+
+def appeal_json(appeal: dict) -> dict:
+    """The appeal as it appears in --json."""
+    return {
+        "mitigating": appeal["mitigating"],
+        "aggravating": appeal["aggravating"],
+        "mitigating_count": len(appeal["mitigating"]),
+        "aggravating_count": len(appeal["aggravating"]),
+        "net": appeal["net"],
+        "reduction_margin": appeal["reduction_margin"],
+        "commutation_margin": appeal["commutation_margin"],
+        "ruling": appeal["ruling"],
+        "ruling_label": APPEAL_RULING_LABELS[appeal["ruling"]],
+        "original_tier": appeal["original_tier"],
+        "original_sentence": appeal["original_sentence"],
+        "appealed_tier": appeal["appealed_tier"],
+        "appealed_sentence": appeal["appealed_sentence"],
+        "closing": appeal_closing(appeal),
+    }
+
+
+def render_appeal_markdown(appeal: dict) -> list[str]:
+    """The '## Appeals Court' section lines for --out."""
+    out = ["## Appeals Court", ""]
+    out.append(
+        f"The court re-hears the verdict on its factors. Under "
+        f"the {appeal['reduction_margin']}-factor rule, "
+        f"mitigating factors must outnumber aggravating factors "
+        f"by that many to reduce the verdict by one rung; "
+        f"outnumbering them at all commutes the sentence."
+    )
+    for kind in ("mitigating", "aggravating"):
+        factors = appeal[kind]
+        out += ["", f"**{kind.capitalize()} factors "
+                    f"({len(factors)}):**", ""]
+        if not factors:
+            out.append("- none entered")
+        for entry in factors:
+            out.append(f"- **{entry['name']}:** {entry['evidence']}")
+    out += [
+        "",
+        f"Original verdict: **{appeal['original_tier']}**. Ruling: "
+        f"**{APPEAL_RULING_LABELS[appeal['ruling']]}**. Verdict on "
+        f"appeal: **{appeal['appealed_tier']}**. "
+        f"{appeal['appealed_sentence']}",
+        "",
+        appeal_closing(appeal),
+        "",
+    ]
+    return out
+
+
+# ---------------------------------------------------------------------------
 # the downloads docket: a second court, for the downloads folder
 # ---------------------------------------------------------------------------
 
@@ -2969,7 +3233,8 @@ def render_markdown(stats: dict, tier: str, sentence: str, awards: list[dict],
                     rematch_requested: bool = False,
                     commentary: str | None = None,
                     trend: dict | None = None,
-                    rehab: dict | None = None) -> str:
+                    rehab: dict | None = None,
+                    appeal: dict | None = None) -> str:
     out = [
         "# Snap Judgment",
         "",
@@ -3117,6 +3382,8 @@ def render_markdown(stats: dict, tier: str, sentence: str, awards: list[dict],
         out.append("")
     if rehab is not None:
         out += [""] + render_rehabilitation_markdown(rehab, tier)
+    if appeal is not None:
+        out += [""] + render_appeal_markdown(appeal)
     if trend is not None:
         out += [""] + render_trend_markdown(trend, "screenshots")
     return "\n".join(out)
@@ -4641,6 +4908,14 @@ def build_parser() -> argparse.ArgumentParser:
                              "after each step, a review-time estimate, "
                              "and a session schedule (nothing is "
                              "actually deleted)")
+    parser.add_argument("--appeal", action="store_true",
+                        help="also convene the appeals court: the "
+                             "verdict is re-heard on its mitigating "
+                             "and aggravating factors, and under the "
+                             "three-factor rule a strong enough case "
+                             "reduces the verdict by one rung or "
+                             "commutes the sentence (the original "
+                             "verdict stays in the record)")
     parser.add_argument("--badge", metavar="FILE",
                         help="write a shields-style verdict badge (SVG) "
                              "to FILE")
@@ -4686,6 +4961,7 @@ def _run_downloads_court(args) -> int:
         ("--vs-year", args.vs_year is not None),
         ("--plea-bargain", bool(args.plea_bargain)),
         ("--rehab", bool(args.rehab)),
+        ("--appeal", bool(args.appeal)),
         ("--judge-file", args.judge_file is not None),
     ]
     for flag, present in unsupported:
@@ -5858,6 +6134,7 @@ def main(argv=None) -> int:
             ("--html", args.html is not None),
             ("--trend", bool(args.trend)),
             ("--rehab", bool(args.rehab)),
+            ("--appeal", bool(args.appeal)),
         ]
         for flag, present in refused:
             if present:
@@ -5896,6 +6173,7 @@ def main(argv=None) -> int:
             ("--cleanup-list", args.cleanup_list is not None),
             ("--wrapped-kit", args.wrapped_kit is not None),
             ("--trend", bool(args.trend)),
+            ("--appeal", bool(args.appeal)),
         ]
         for flag, present in refused:
             if present:
@@ -5918,12 +6196,37 @@ def main(argv=None) -> int:
             ("--plea-bargain", bool(args.plea_bargain)),
             ("--wrapped-kit", args.wrapped_kit is not None),
             ("--rehab", bool(args.rehab)),
+            ("--appeal", bool(args.appeal)),
         ]
         for flag, present in refused:
             if present:
                 print(
                     f"snapjudgment: {flag} is not supported "
                     f"with --trend",
+                    file=sys.stderr,
+                )
+                return 2
+
+    if args.appeal:
+        # An appeal re-hears one folder set's own verdict in one
+        # court; proceedings that compare, project, or combine
+        # do not combine with it.
+        refused = [
+            ("--vs", args.vs is not None),
+            ("--vs-year", args.vs_year is not None),
+            ("--rematch", bool(args.rematch)),
+            ("--grand-jury", bool(args.grand_jury)),
+            ("--plea-bargain", bool(args.plea_bargain)),
+            ("--cleanup-list", args.cleanup_list is not None),
+            ("--wrapped-kit", args.wrapped_kit is not None),
+            ("--trend", bool(args.trend)),
+            ("--rehab", bool(args.rehab)),
+        ]
+        for flag, present in refused:
+            if present:
+                print(
+                    f"snapjudgment: {flag} is not supported "
+                    f"with --appeal",
                     file=sys.stderr,
                 )
                 return 2
@@ -6169,6 +6472,10 @@ def main(argv=None) -> int:
         if args.rehab:
             rehab = compute_rehabilitation(shots, voice=voice)
 
+        appeal = None
+        if args.appeal:
+            appeal = compute_appeal(stats, tier, sentence)
+
         cleanup = None
         if args.cleanup_list is not None:
             # The cleanup order IS the plea bargain, computed silently
@@ -6279,7 +6586,7 @@ def main(argv=None) -> int:
                                 plea=plea, rematch=rematch,
                                 rematch_requested=args.rematch,
                                 commentary=commentary, trend=trend,
-                                rehab=rehab),
+                                rehab=rehab, appeal=appeal),
                 encoding="utf-8"
             )
         if args.html:
@@ -6380,6 +6687,8 @@ def main(argv=None) -> int:
                 data["trend"] = trend_json(trend)
             if rehab is not None:
                 data["rehabilitation"] = rehab_json(rehab, tier)
+            if appeal is not None:
+                data["appeal"] = appeal_json(appeal)
             print(json.dumps(data, indent=2))
         else:
             if args.trend and trend is not None:
@@ -6410,6 +6719,8 @@ def main(argv=None) -> int:
                     print(render_plea_bargain(plea, tier))
                 if rehab is not None:
                     print(render_rehabilitation(rehab, tier))
+                if appeal is not None:
+                    print(render_appeal(appeal))
                 if cleanup is not None:
                     print(
                         f"  CLEANUP ORDER: {cleanup['count']} files "

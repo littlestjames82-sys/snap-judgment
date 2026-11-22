@@ -11,7 +11,7 @@ _snapjudgment() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    local opts="--court --all --grand-jury --recursive --json --card --svg --png --out --html --since --until --year --plea-bargain --plea-years --cleanup-list --rematch --trend --rehab --badge --vs --vs-year --wrapped-kit --fail-above --judge --judge-file --intensity --oneline --csv --history --version --help"
+    local opts="--court --all --grand-jury --recursive --json --card --svg --png --out --html --since --until --year --plea-bargain --plea-years --cleanup-list --rematch --trend --rehab --appeal --badge --vs --vs-year --wrapped-kit --fail-above --judge --judge-file --intensity --oneline --csv --history --version --help"
 
     case "$prev" in
         --court)

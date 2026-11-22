@@ -25,6 +25,7 @@ _snapjudgment() {
         '--rematch[compare this hearing against the last court record for the same folders]' \
         '--trend[record this hearing, then report the trend of the court record for the same folders]' \
         '--rehab[also assign a staged rehabilitation plan: duplicate extras, ancient evidence, then the largest remaining screenshots]' \
+        '--appeal[also convene the appeals court: the verdict re-heard on its mitigating and aggravating factors]' \
         '--badge=[write a shields-style verdict badge (SVG) to FILE]:file:_files' \
         '--vs=[also judge FOLDER as a co-defendant and compare]:folder:_files -/' \
         '--vs-year=[compare year YYYY against the most recent other year in the same folders]:year:' \

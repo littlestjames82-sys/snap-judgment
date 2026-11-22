@@ -5624,6 +5624,328 @@ class RehabTests(TempDirCase):
 
 
 # ---------------------------------------------------------------------------
+# the appeals court (v0.14.0)
+# ---------------------------------------------------------------------------
+
+class AppealTests(TempDirCase):
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = sj.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def base_stats(self, **overrides):
+        """A neutral record: no factor fires either way."""
+        stats = {
+            "night_share": 30.0,
+            "duplicate_files": 5,
+            "duplicate_bytes_wasted": 5000,
+            "longest_gap_days": 10,
+            "median_per_active_day": 5.0,
+            "retention_old_share": 50.0,
+            "three_am_count": 0,
+            "burst_record": 2,
+            "longest_streak": 3,
+            "busiest_day_count": 6,
+            "busiest_day": datetime(2026, 5, 1).date(),
+        }
+        stats.update(overrides)
+        return stats
+
+    def seed_daylight_folder(self, duplicates=0):
+        """60 recent screenshots at noon, 2 a day every other day,
+        distinct dimensions except for `duplicates` exact copies of
+        the first shots. Tier: Petty Offender."""
+        shots = []
+        for i in range(60 - duplicates):
+            shots.append(make_png(100 + i, 100, pad=i * 10))
+        for j in range(duplicates):
+            shots.append(make_png(100 + j, 100, pad=j * 10))
+        for i, data in enumerate(shots):
+            day = datetime(2026, 4, 1, 12, 0) + timedelta(days=2 * (i // 2))
+            write_file(self.root, f"screenshot_{i:03d}.png", data, day)
+
+    def seed_night_folder(self):
+        """50 screenshots at 23:30, all the same file: a burst of 10
+        on day one, then 2 a day every other day. Tier: Petty
+        Offender, with a night habit, duplicate waste, and a burst
+        against it."""
+        png = make_png(100, 100)
+        for i in range(10):
+            write_file(self.root, f"screenshot_burst{i}.png", png,
+                       datetime(2026, 4, 1, 23, 30) + timedelta(seconds=5 * i))
+        for i in range(40):
+            day = datetime(2026, 4, 3, 23, 30) + timedelta(days=2 * (i // 2))
+            write_file(self.root, f"screenshot_{i:03d}.png", png, day)
+
+    # -- unit level ------------------------------------------------------
+
+    def test_neutral_record_is_denied(self):
+        appeal = sj.compute_appeal(
+            self.base_stats(), "Repeat Offender", "Sentence: probation."
+        )
+        self.assertEqual(appeal["mitigating"], [])
+        self.assertEqual(appeal["aggravating"], [])
+        self.assertEqual(appeal["net"], 0)
+        self.assertEqual(appeal["ruling"], "denied")
+        self.assertEqual(appeal["appealed_tier"], "Repeat Offender")
+        self.assertEqual(appeal["appealed_sentence"], "Sentence: probation.")
+        self.assertIn("Appeal denied", sj.appeal_closing(appeal))
+
+    def test_all_mitigating_grants_one_rung(self):
+        stats = self.base_stats(
+            night_share=5.0, duplicate_files=0, longest_gap_days=90,
+            median_per_active_day=1.0, retention_old_share=0.0,
+        )
+        appeal = sj.compute_appeal(stats, "Repeat Offender", "S.")
+        self.assertEqual(
+            [f["key"] for f in appeal["mitigating"]],
+            ["daylight_record", "no_duplicate_waste", "shows_restraint",
+             "measured_pace", "little_ancient_evidence"],
+        )
+        self.assertEqual(appeal["aggravating"], [])
+        self.assertEqual(appeal["net"], 5)
+        self.assertEqual(appeal["ruling"], "granted")
+        self.assertEqual(appeal["original_tier"], "Repeat Offender")
+        self.assertEqual(appeal["appealed_tier"], "Petty Offender")
+        self.assertEqual(
+            appeal["appealed_sentence"], sj.APPEAL_COMMUTED_SENTENCE
+        )
+        closing = sj.appeal_closing(appeal)
+        self.assertIn("reduced on appeal from Repeat Offender "
+                      "to Petty Offender", closing)
+        self.assertIn("5 to 0", closing)
+
+    def test_all_aggravating_is_denied(self):
+        stats = self.base_stats(
+            night_share=80.0, three_am_count=9, duplicate_files=25,
+            burst_record=12, longest_streak=30, busiest_day_count=40,
+        )
+        appeal = sj.compute_appeal(stats, "Habitual Hoarder", "S.")
+        self.assertEqual(
+            [f["key"] for f in appeal["aggravating"]],
+            ["night_habit", "three_am_activity", "duplicate_waste",
+             "burst_behavior", "relentless_streak", "single_day_haul"],
+        )
+        self.assertEqual(appeal["mitigating"], [])
+        self.assertEqual(appeal["net"], -6)
+        self.assertEqual(appeal["ruling"], "denied")
+        self.assertEqual(appeal["appealed_tier"], "Habitual Hoarder")
+        self.assertEqual(appeal["appealed_sentence"], "S.")
+
+    def test_net_two_commutes_sentence_only(self):
+        stats = self.base_stats(
+            night_share=5.0, duplicate_files=0, retention_old_share=0.0,
+            burst_record=12,
+        )
+        appeal = sj.compute_appeal(stats, "Petty Offender", "S.")
+        self.assertEqual(appeal["net"], 2)
+        self.assertEqual(appeal["ruling"], "commuted")
+        self.assertEqual(appeal["appealed_tier"], "Petty Offender")
+        self.assertEqual(
+            appeal["appealed_sentence"], sj.APPEAL_COMMUTED_SENTENCE
+        )
+        self.assertIn("commute the sentence", sj.appeal_closing(appeal))
+
+    def test_granted_at_the_floor_stands_and_commutes(self):
+        stats = self.base_stats(
+            night_share=0.0, duplicate_files=0,
+            median_per_active_day=1.0, retention_old_share=0.0,
+        )
+        appeal = sj.compute_appeal(stats, "Innocent Bystander", "S.")
+        self.assertEqual(appeal["net"], 4)
+        self.assertEqual(appeal["ruling"], "granted")
+        self.assertEqual(appeal["appealed_tier"], "Innocent Bystander")
+        self.assertIn("already the lowest on the ladder",
+                      sj.appeal_closing(appeal))
+
+    def test_factor_thresholds_are_exact(self):
+        # night share: 20 is not daylight, 40 is a night habit
+        appeal = sj.compute_appeal(
+            self.base_stats(night_share=20.0), "Petty Offender", "S.")
+        self.assertNotIn("daylight_record",
+                         [f["key"] for f in appeal["mitigating"]])
+        appeal = sj.compute_appeal(
+            self.base_stats(night_share=40.0), "Petty Offender", "S.")
+        self.assertIn("night_habit",
+                      [f["key"] for f in appeal["aggravating"]])
+        # duplicates: 9 suspects are neither mercy nor waste, 10 are waste
+        appeal = sj.compute_appeal(
+            self.base_stats(duplicate_files=9), "Petty Offender", "S.")
+        keys = ([f["key"] for f in appeal["mitigating"]]
+                + [f["key"] for f in appeal["aggravating"]])
+        self.assertNotIn("duplicate_waste", keys)
+        self.assertNotIn("no_duplicate_waste", keys)
+        appeal = sj.compute_appeal(
+            self.base_stats(duplicate_files=10), "Petty Offender", "S.")
+        self.assertIn("duplicate_waste",
+                      [f["key"] for f in appeal["aggravating"]])
+
+    # -- screenshots court -------------------------------------------------
+
+    def test_section_absent_without_flag(self):
+        self.seed_daylight_folder()
+        code, out, _ = self.run_main([str(self.root)])
+        self.assertEqual(code, 0)
+        self.assertNotIn("APPEALS COURT", out)
+        code, out, _ = self.run_main([str(self.root), "--json"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("appeal", json.loads(out))
+
+    def test_granted_on_a_daylight_folder(self):
+        self.seed_daylight_folder()
+        code, out, _ = self.run_main([str(self.root), "--appeal"])
+        self.assertEqual(code, 0)
+        self.assertIn("THE APPEALS COURT", out)
+        self.assertIn("Mitigating factors (4)", out)
+        self.assertIn("Aggravating factors (0)", out)
+        self.assertIn("Appeal granted", out)
+        self.assertIn("Verdict on appeal", out)
+        self.assertIn("reduced on appeal from Petty Offender "
+                      "to Innocent Bystander", out)
+
+    def test_original_verdict_stands_in_the_report(self):
+        self.seed_daylight_folder()
+        code, out, _ = self.run_main(
+            [str(self.root), "--appeal", "--json"]
+        )
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual(data["verdict"], "Petty Offender")
+        self.assertEqual(data["appeal"]["original_tier"], "Petty Offender")
+        self.assertEqual(
+            data["appeal"]["appealed_tier"], "Innocent Bystander"
+        )
+
+    def test_commuted_on_a_mostly_daylight_folder(self):
+        self.seed_daylight_folder(duplicates=10)
+        code, out, _ = self.run_main([str(self.root), "--appeal"])
+        self.assertEqual(code, 0)
+        self.assertIn("Mitigating factors (3)", out)
+        self.assertIn("Aggravating factors (1)", out)
+        self.assertIn("Sentence commuted", out)
+        self.assertIn("commute the sentence", out)
+
+    def test_denied_on_a_night_folder(self):
+        self.seed_night_folder()
+        code, out, _ = self.run_main([str(self.root), "--appeal"])
+        self.assertEqual(code, 0)
+        self.assertIn("A night habit", out)
+        self.assertIn("Duplicate waste", out)
+        self.assertIn("Burst behavior", out)
+        self.assertIn("Appeal denied", out)
+        self.assertIn("The verdict and the sentence stand.", out)
+
+    def test_single_screenshot_appeal(self):
+        write_file(self.root, "screenshot_one.png", make_png(100, 100),
+                   datetime(2026, 6, 1, 12, 0))
+        code, out, _ = self.run_main([str(self.root), "--appeal"])
+        self.assertEqual(code, 0)
+        self.assertIn("THE APPEALS COURT", out)
+        self.assertIn("Appeal granted", out)
+        self.assertIn("already the lowest on the ladder", out)
+
+    def test_empty_folder(self):
+        empty = self.root / "empty"
+        empty.mkdir()
+        code, out, _ = self.run_main([str(empty), "--appeal"])
+        self.assertEqual(code, 2)
+        self.assertIn("No Evidence", out)
+        code, out, _ = self.run_main([str(empty), "--appeal", "--json"])
+        self.assertEqual(code, 2)
+        data = json.loads(out)
+        self.assertEqual(data["verdict"], "No Evidence")
+        self.assertNotIn("appeal", data)
+
+    def test_json_shape(self):
+        self.seed_daylight_folder()
+        code, out, _ = self.run_main(
+            [str(self.root), "--appeal", "--json"]
+        )
+        self.assertEqual(code, 0)
+        appeal = json.loads(out)["appeal"]
+        self.assertEqual(
+            set(appeal),
+            {"mitigating", "aggravating", "mitigating_count",
+             "aggravating_count", "net", "reduction_margin",
+             "commutation_margin", "ruling", "ruling_label",
+             "original_tier", "original_sentence", "appealed_tier",
+             "appealed_sentence", "closing"},
+        )
+        self.assertEqual(
+            set(appeal["mitigating"][0]), {"key", "name", "evidence"}
+        )
+        self.assertEqual(appeal["mitigating_count"], 4)
+        self.assertEqual(appeal["aggravating_count"], 0)
+        self.assertEqual(appeal["net"], 4)
+        self.assertEqual(appeal["reduction_margin"], 3)
+        self.assertEqual(appeal["ruling"], "granted")
+        self.assertEqual(appeal["ruling_label"], "Appeal granted")
+
+    def test_markdown_section(self):
+        self.seed_daylight_folder()
+        md_path = self.root / "report.md"
+        code, _, _ = self.run_main(
+            [str(self.root), "--appeal", "--out", str(md_path)]
+        )
+        self.assertEqual(code, 0)
+        md = md_path.read_text(encoding="utf-8")
+        self.assertIn("## Appeals Court", md)
+        self.assertIn("**Mitigating factors (4):**", md)
+        self.assertIn("Verdict on appeal: **Innocent Bystander**", md)
+        self.assertIn("reduced on appeal", md)
+
+    def test_appeal_composes_with_judge_and_intensity(self):
+        base = datetime(2026, 6, 1, 23, 30)  # every shot at night
+        for i in range(60):
+            write_file(self.root, f"screenshot_{i}.png",
+                       make_png(100 + i, 100, pad=i * 10),
+                       base + timedelta(days=i % 20))
+        code, out, _ = self.run_main(
+            [str(self.root), "--appeal", "--judge", "strict",
+             "--intensity", "roast"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("THE APPEALS COURT", out)
+        self.assertIn("COMMENTARY:", out)
+
+    def test_appeal_refusals(self):
+        self.seed_daylight_folder()
+        combos = [
+            ["--vs", str(self.root)],
+            ["--vs-year", "2025"],
+            ["--rematch"],
+            ["--plea-bargain"],
+            ["--cleanup-list", str(self.root / "cleanup.txt")],
+            ["--wrapped-kit", str(self.root / "kit")],
+            ["--trend"],
+            ["--rehab"],
+            ["--grand-jury"],
+        ]
+        for extra in combos:
+            with self.subTest(extra=extra):
+                code, _, err = self.run_main(
+                    [str(self.root), "--appeal"] + extra
+                )
+                self.assertEqual(code, 2)
+                self.assertIn("not supported", err)
+                self.assertIn("--appeal", err)
+
+    # -- downloads court ---------------------------------------------------
+
+    def test_appeal_refused_in_downloads_court(self):
+        dl_dir = self.root / "downloads"
+        write_sized(dl_dir, "file_0.dat", 1000,
+                    datetime(2026, 6, 1, 12, 0))
+        code, _, err = self.run_main(
+            [str(dl_dir), "--court", "downloads", "--appeal"]
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("--appeal", err)
+        self.assertIn("downloads court", err)
+
+
+# ---------------------------------------------------------------------------
 # shell completions (v0.7.0)
 # ---------------------------------------------------------------------------
 

@@ -4,6 +4,37 @@ All notable changes to Snap Judgment are recorded here. Versions are the
 tool's own; the record is the record. Every version below shipped on
 November 19, 2026 - it was that kind of day in court.
 
+## 0.14.0 - 2026-11-22
+
+- The appeals court: `--appeal` re-hears the verdict on its
+  factors. Every statistic the trial court already computed is
+  entered as a mitigating factor (a daylight record, no duplicate
+  waste, a long silence in the record, a measured pace, little
+  ancient evidence) or an aggravating factor (a night habit,
+  3 AM activity, duplicate waste, burst behavior, a relentless
+  streak, a single-day haul), each with its evidence. The panel
+  rules by a stated rule, never by vibes: mitigating factors
+  outnumbering aggravating factors by three or more grants the
+  appeal and reduces the verdict by exactly one rung on the
+  ladder (never below Innocent Bystander, where the verdict
+  stands and the sentence is commuted instead); outnumbering
+  them at all commutes the sentence; otherwise the appeal is
+  denied and both stand. The original verdict and sentence are
+  always reported beside the appealed ones, in the terminal
+  report, as an `appeal` object in `--json`, and as an
+  `## Appeals Court` section in the Markdown report, and the
+  closing states the factor counts the ruling rests on. The
+  appeal composes with `--judge` and `--intensity` as usual.
+  It refuses `--vs`, `--vs-year`, `--rematch`, `--plea-bargain`,
+  `--cleanup-list`, `--wrapped-kit`, `--trend`, `--rehab`, and
+  `--grand-jury` with a plain error: those are different
+  proceedings, and a verdict is re-heard on its own record, not
+  on a comparison or a projection. The downloads docket refuses
+  `--appeal` with the same plain error; an appeal is a
+  screenshots-court proceeding. An appeal re-hears the case; it
+  does not rewrite the record, and the verdict in the court
+  record and the report header remains the original.
+
 ## 0.13.0 - 2026-11-22
 
 - The rehabilitation plan: `--rehab` turns the sentence into a

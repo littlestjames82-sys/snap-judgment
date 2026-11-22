@@ -29,6 +29,10 @@ with a combined FULL DOCKET ruling: both verdicts, the combined evidence,
 and a standing line keyed to the pair. See [The grand jury](#the-grand-jury)
 below.
 
+New in v0.14.0:
+
+- `--appeal`: the appeals court. The verdict is re-heard on its mitigating and aggravating factors, each with its evidence, and ruled on by a stated rule: mitigating factors outnumbering aggravating factors by three or more reduces the verdict by one rung, outnumbering them at all commutes the sentence, and anything else is denied. The original verdict always stays in the record beside the appealed one. See [The appeals court](#the-appeals-court) below.
+
 New in v0.13.0:
 
 - `--rehab`: the rehabilitation plan. A staged cleanup plan (duplicate extras, then ancient evidence, then the largest remaining screenshots) with the space each step reclaims, the projected verdict after each step, a review-time estimate, and a session schedule. Nothing is deleted; the court assigns the plan, you serve it. See [The rehabilitation plan](#the-rehabilitation-plan) below.
@@ -72,6 +76,7 @@ snapjudgment ~/Pictures --cleanup-list cleanup.txt  # the cleanup order: the exa
 snapjudgment ~/Pictures --plea-bargain   # the hypothetical verdict if you deleted the old and the duplicated
 snapjudgment ~/Pictures --rematch        # compare this hearing with the last one on record
 snapjudgment ~/Pictures --rehab          # the rehabilitation plan: a staged cleanup plan with a projected verdict per step
+snapjudgment ~/Pictures --appeal         # the appeals court: the verdict re-heard on its mitigating and aggravating factors
 snapjudgment ~/Pictures --badge badge.svg  # a shields-style verdict badge for your README
 snapjudgment ~/Pictures --fail-above "Repeat Offender"  # exit 1 if the verdict ranks above this tier
 snapjudgment ~/Pictures --oneline        # print exactly one summary line
@@ -267,6 +272,43 @@ grand-jury proceedings, and the downloads docket refuses it; both
 refuse with a plain error. Like everything else in this court, the
 plan is read-only: Snap Judgment assigns it and deletes nothing.
 
+### The appeals court
+
+`--appeal` takes the verdict upstairs: the same evidence, re-heard
+on its factors. Every statistic the trial court already computed
+is entered as a mitigating factor or an aggravating factor, each
+with its evidence:
+
+- **Mitigating** - a daylight record (under 20% taken at night),
+  no duplicate waste, shows restraint (a silence of 60 days or
+  more in the record), a measured pace (a median of at most 2
+  screenshots per active day), little ancient evidence (under
+  10% over a year old).
+- **Aggravating** - a night habit (40% or more taken at night),
+  3 AM activity (5 or more screenshots between 2 and 4 AM),
+  duplicate waste (10 or more duplicate suspects), burst
+  behavior (8 or more screenshots inside a single minute), a
+  relentless streak (14 or more consecutive days), a single-day
+  haul (25 or more screenshots on the busiest day).
+
+The panel rules by a stated rule, never by vibes. Mitigating
+factors outnumbering aggravating factors by three or more grants
+the appeal: the verdict is reduced by exactly one rung on the
+ladder, and the sentence is commuted. (At Innocent Bystander
+there is no lower rung, so the verdict stands and the sentence
+is commuted instead.) Outnumbering them at all commutes the
+sentence and leaves the verdict standing. Anything else is
+denied, and both stand. The original verdict and sentence are
+always reported beside the appealed ones, in the terminal
+report, as an `appeal` object in `--json`, and as a section of
+the Markdown report, and the proceeding composes with `--judge`
+and `--intensity`. It does not combine with the comparison,
+plea, cleanup-order, wrapped-kit, trend, rehabilitation,
+rematch, or grand-jury proceedings, and the downloads docket
+refuses it; both refuse with a plain error. An appeal re-hears
+the case; it does not rewrite the record, so the verdict in the
+report header and the court record remains the original.
+
 ### The downloads docket
 
 `--court downloads` convenes a second court for the folder where good
@@ -311,7 +353,8 @@ court record all work in this court. The cleanup order works here
 too, listing only the provable waste: the duplicate-download extra
 copies, every group member except the keeper. Only the comparisons
 (`--vs`, `--vs-year`), the plea bargain, the rehabilitation plan
-(`--rehab`), and judge packs
+(`--rehab`), the appeals court
+(`--appeal`), and judge packs
 (`--judge-file`) are refused with a plain error, because they belong
 to the screenshots court's evidence. A sample hearing is at
 `examples/downloads-demo-output.txt`. `--court` can also live in the
