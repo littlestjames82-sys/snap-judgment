@@ -4,6 +4,60 @@ All notable changes to Snap Judgment are recorded here. Versions are the
 tool's own; the record is the record. Every version below shipped on
 November 19, 2026 - it was that kind of day in court.
 
+## 0.15.0 - 2026-11-22
+
+- Downloads parity for the rehabilitation plan: `--rehab` is now
+  heard in the downloads court, on the docket's own evidence.
+  The files are partitioned into three steps, in order, every
+  file claimed by at most one step: duplicate extras first (the
+  duplicate-download extra copies, the same provable waste the
+  cleanup order lists), then ancient installers (installers
+  older than two years, measured from the newest file, that
+  step 1 did not already claim - an old duplicate installer is
+  claimed once, as a duplicate), then the heavy evidence (the
+  ten largest files still standing, assigned only when more
+  than ten would remain). Each step reports its files and bytes
+  and the cumulative position after serving it, with projected
+  verdicts on the docket's own ladder, and the plan closes with
+  the totals, the reclaim share, an estimated review time, a
+  session schedule, and the docket's outlook: no rehabilitation
+  required, rehabilitable, or space-but-not-standing. It
+  appears in the terminal report, as a `rehabilitation` object
+  in `--json`, and as a `## Rehabilitation Plan` section in
+  the Markdown report, and it composes with `--judge` and
+  `--intensity`. The proceedings it refuses are the same ones
+  the screenshots court refuses, with the same plain errors.
+  Nothing is deleted, moved, or modified: the docket assigns
+  the plan, the defendant serves it.
+- Downloads parity for the appeals court: `--appeal` is now
+  heard in the downloads court, on the docket's own factors.
+  The mitigating ledger is installer restraint (two or fewer
+  installers kept), few unopened archives (two or fewer), no
+  duplicate waste, little ancient evidence (under 10% over a
+  year old), and a light load (under 100 MB in total); the
+  aggravating ledger is duplicate waste (five or more extra
+  copies), an installer pileup (ten or more), an ancient relic
+  (the oldest file at least three years old), an archive hoard
+  (fifteen or more), a gigabyte landfill (5 GB or more), and a
+  time capsule (60% or more over a year old) - the same
+  evidence bands the docket's awards already honor. The panel
+  rules by the same stated rule as the screenshots court:
+  mitigating factors outnumbering aggravating factors by three
+  or more grants the appeal and reduces the verdict by exactly
+  one rung on the docket's ladder (never below Tidy Desk, where
+  the verdict stands and the sentence is commuted instead);
+  outnumbering them at all commutes the sentence; otherwise
+  the appeal is denied and both stand. The original verdict
+  and sentence are always reported beside the appealed ones,
+  in the terminal report, as an `appeal` object in `--json`,
+  and as an `## Appeals Court` section in the Markdown report,
+  and the verdict in the report header and the court record
+  remains the original. With this round the docket hears every
+  proceeding the screenshots court hears except the plea
+  bargain, the co-defendant-by-year comparison, and judge
+  packs, which stay refused: their evidence is not the
+  docket's.
+
 ## 0.14.0 - 2026-11-22
 
 - The appeals court: `--appeal` re-hears the verdict on its

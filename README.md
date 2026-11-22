@@ -29,6 +29,10 @@ with a combined FULL DOCKET ruling: both verdicts, the combined evidence,
 and a standing line keyed to the pair. See [The grand jury](#the-grand-jury)
 below.
 
+New in v0.15.0:
+
+- Downloads parity for `--rehab` and `--appeal`: the Downloads Docket now hears the two newest proceedings on its own evidence. Its rehabilitation plan clears duplicate extras, then ancient installers, then the heavy evidence, with projected verdicts on the docket's own ladder; its appeals court re-hears the verdict on docket factors (installer restraint and a light load against duplicate waste, installer pileups, ancient relics, archive hoards, gigabyte landfills, and time capsules) under the same three-factor rule. See [The downloads docket](#the-downloads-docket) below.
+
 New in v0.14.0:
 
 - `--appeal`: the appeals court. The verdict is re-heard on its mitigating and aggravating factors, each with its evidence, and ruled on by a stated rule: mitigating factors outnumbering aggravating factors by three or more reduces the verdict by one rung, outnumbering them at all commutes the sentence, and anything else is denied. The original verdict always stays in the record beside the appealed one. See [The appeals court](#the-appeals-court) below.
@@ -77,6 +81,8 @@ snapjudgment ~/Pictures --plea-bargain   # the hypothetical verdict if you delet
 snapjudgment ~/Pictures --rematch        # compare this hearing with the last one on record
 snapjudgment ~/Pictures --rehab          # the rehabilitation plan: a staged cleanup plan with a projected verdict per step
 snapjudgment ~/Pictures --appeal         # the appeals court: the verdict re-heard on its mitigating and aggravating factors
+snapjudgment ~/Downloads --court downloads --rehab   # the docket's rehabilitation plan: duplicate extras, ancient installers, heavy evidence
+snapjudgment ~/Downloads --court downloads --appeal  # the docket's appeals court: the verdict re-heard on the docket's own factors
 snapjudgment ~/Pictures --badge badge.svg  # a shields-style verdict badge for your README
 snapjudgment ~/Pictures --fail-above "Repeat Offender"  # exit 1 if the verdict ranks above this tier
 snapjudgment ~/Pictures --oneline        # print exactly one summary line
@@ -268,9 +274,12 @@ appears in the terminal report, as a `rehabilitation` object in
 `--json`, and as a section of the Markdown report, and it composes
 with `--judge` and `--intensity`. It does not combine with the
 comparison, plea, cleanup-order, wrapped-kit, trend, rematch, or
-grand-jury proceedings, and the downloads docket refuses it; both
-refuse with a plain error. Like everything else in this court, the
-plan is read-only: Snap Judgment assigns it and deletes nothing.
+grand-jury proceedings; the refusals are plain errors. The
+downloads docket hears its own rehabilitation plan, on its own
+steps: duplicate extras, then ancient installers, then the heavy
+evidence, projected on the docket's ladder. Like everything else
+in this court, the plan is read-only: Snap Judgment assigns it
+and deletes nothing.
 
 ### The appeals court
 
@@ -304,10 +313,16 @@ report, as an `appeal` object in `--json`, and as a section of
 the Markdown report, and the proceeding composes with `--judge`
 and `--intensity`. It does not combine with the comparison,
 plea, cleanup-order, wrapped-kit, trend, rehabilitation,
-rematch, or grand-jury proceedings, and the downloads docket
-refuses it; both refuse with a plain error. An appeal re-hears
-the case; it does not rewrite the record, so the verdict in the
-report header and the court record remains the original.
+rematch, or grand-jury proceedings; the refusals are plain
+errors. The downloads docket hears its own appeals court, on
+its own factors: installer restraint, few unopened archives, no
+duplicate waste, little ancient evidence, and a light load
+against duplicate waste, an installer pileup, an ancient relic,
+an archive hoard, a gigabyte landfill, and a time capsule,
+ruled by the same three-factor rule on the docket's ladder. An
+appeal re-hears the case; it does not rewrite the record, so
+the verdict in the report header and the court record remains
+the original.
 
 ### The downloads docket
 
@@ -351,12 +366,26 @@ the docket's own ladder), the full HTML report (`--html`),
 archive, or other), the `--since` / `--until` date filters, and the
 court record all work in this court. The cleanup order works here
 too, listing only the provable waste: the duplicate-download extra
-copies, every group member except the keeper. Only the comparisons
-(`--vs`, `--vs-year`), the plea bargain, the rehabilitation plan
-(`--rehab`), the appeals court
-(`--appeal`), and judge packs
-(`--judge-file`) are refused with a plain error, because they belong
-to the screenshots court's evidence. A sample hearing is at
+copies, every group member except the keeper. The rehabilitation
+plan (`--rehab`) works here too, on the docket's own steps:
+duplicate extras, then ancient installers (installers older than
+two years, measured from the newest file), then the ten largest
+files still standing, with projected verdicts on the docket's
+ladder, a review-time estimate, and a session schedule. The
+appeals court (`--appeal`) sits here too, re-hearing the verdict
+on the docket's own factors: mitigating installer restraint (two
+or fewer installers), few unopened archives (two or fewer), no
+duplicate waste, little ancient evidence (under 10% over a year
+old), and a light load (under 100 MB), against aggravating
+duplicate waste (five or more extra copies), an installer pileup
+(ten or more), an ancient relic (the oldest file at least three
+years old), an archive hoard (fifteen or more), a gigabyte
+landfill (5 GB or more), and a time capsule (60% or more over a
+year old), ruled by the same three-factor rule as the screenshots
+court, on the docket's ladder. Only the co-defendant comparison
+by year (`--vs-year`), the plea bargain, and judge packs
+(`--judge-file`) are refused with a plain error, because their
+evidence is not the docket's. A sample hearing is at
 `examples/downloads-demo-output.txt`. `--court` can also live in the
 config file.
 

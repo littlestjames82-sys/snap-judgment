@@ -5611,16 +5611,19 @@ class RehabTests(TempDirCase):
 
     # -- downloads court ---------------------------------------------------
 
-    def test_rehab_refused_in_downloads_court(self):
+    def test_rehab_heard_in_downloads_court(self):
+        # v0.15.0 spec change: the docket hears its own plan now.
+        # (Was test_rehab_refused_in_downloads_court through
+        # v0.14.0; full docket coverage lives in
+        # DownloadsParityTests.)
         dl_dir = self.root / "downloads"
         write_sized(dl_dir, "file_0.dat", 1000,
                     datetime(2026, 6, 1, 12, 0))
-        code, _, err = self.run_main(
+        code, out, _ = self.run_main(
             [str(dl_dir), "--court", "downloads", "--rehab"]
         )
-        self.assertEqual(code, 2)
-        self.assertIn("--rehab", err)
-        self.assertIn("downloads court", err)
+        self.assertEqual(code, 0)
+        self.assertIn("THE REHABILITATION PLAN", out)
 
 
 # ---------------------------------------------------------------------------
@@ -5933,16 +5936,656 @@ class AppealTests(TempDirCase):
 
     # -- downloads court ---------------------------------------------------
 
-    def test_appeal_refused_in_downloads_court(self):
+    def test_appeal_heard_in_downloads_court(self):
+        # v0.15.0 spec change: the docket hears its own appeal now.
+        # (Was test_appeal_refused_in_downloads_court through
+        # v0.14.0; full docket coverage lives in
+        # DownloadsParityTests.)
         dl_dir = self.root / "downloads"
         write_sized(dl_dir, "file_0.dat", 1000,
                     datetime(2026, 6, 1, 12, 0))
-        code, _, err = self.run_main(
+        code, out, _ = self.run_main(
             [str(dl_dir), "--court", "downloads", "--appeal"]
         )
+        self.assertEqual(code, 0)
+        self.assertIn("THE APPEALS COURT", out)
+
+
+# ---------------------------------------------------------------------------
+# downloads parity: the docket's rehabilitation plan and appeals
+# court (v0.15.0)
+# ---------------------------------------------------------------------------
+
+class DownloadsParityTests(TempDirCase):
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = sj.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def seed_plan_folder(self, folder):
+        """36 files, verdict Mild Clutter. A duplicate chain of
+        three setup.exe copies, two ancient installers, one ancient
+        non-installer, and 30 recent documents of growing size."""
+        write_sized(folder, "setup.exe", 5000,
+                    datetime(2026, 6, 1, 12, 0))
+        write_sized(folder, "setup (1).exe", 5000,
+                    datetime(2026, 6, 2, 12, 0))
+        write_sized(folder, "setup (2).exe", 5000,
+                    datetime(2026, 6, 3, 12, 0))
+        write_sized(folder, "oldtool.msi", 8000,
+                    datetime(2022, 1, 1, 12, 0))
+        write_sized(folder, "older.dmg", 9000,
+                    datetime(2021, 1, 1, 12, 0))
+        write_sized(folder, "ancient.pdf", 7000,
+                    datetime(2020, 1, 1, 12, 0))
+        for i in range(30):
+            write_sized(folder, f"doc_{i:02d}.pdf", 1000 + i * 100,
+                        datetime(2026, 5, 1, 12, 0))
+
+    def plan_for(self, folder):
+        files = sj.collect_downloads([folder])
+        stats = sj.analyze_downloads(files)
+        return files, stats, sj.compute_downloads_rehabilitation(
+            files, stats
+        )
+
+    def seed_clean_docket(self, folder):
+        """30 recent plain files: no duplicates, no installers, no
+        archives, nothing old, a light load. Verdict Mild Clutter,
+        five mitigating factors, none aggravating."""
+        for i in range(30):
+            write_sized(folder, f"file_{i:02d}.dat", 1000,
+                        datetime(2026, 6, 1, 12, 0)
+                        + timedelta(days=i % 10))
+
+    def seed_dirty_docket(self, folder):
+        """26 files, verdict Mild Clutter: a five-extra duplicate
+        chain, ten installers, fifteen archives, one ancient
+        relic; only the light load and the low old share argue for
+        mercy."""
+        write_sized(folder, "setup.exe", 2000,
+                    datetime(2026, 6, 1, 12, 0))
+        for i in range(1, 6):
+            write_sized(folder, f"setup ({i}).exe", 2000,
+                        datetime(2026, 6, 1, 12, 0))
+        for i in range(4):
+            write_sized(folder, f"tool_{i}.msi", 3000,
+                        datetime(2026, 6, 1, 12, 0))
+        for i in range(15):
+            write_sized(folder, f"arc_{i:02d}.zip", 1000,
+                        datetime(2026, 6, 1, 12, 0))
+        write_sized(folder, "relic.dat", 5000,
+                    datetime(2022, 1, 1, 12, 0))
+
+    def base_dl_stats(self, **overrides):
+        """A neutral docket record: no factor fires either way."""
+        stats = {
+            "duplicate_extra": 2,
+            "duplicate_extra_bytes": 2000,
+            "installer_count": 5,
+            "installer_bytes": 5000,
+            "installer_human": "4.9 KB",
+            "archive_count": 5,
+            "old_share": 30.0,
+            "total_bytes": 500 * 1024 ** 2,
+            "total_human": "500.0 MB",
+            "oldest_age_years": 1,
+            "oldest_name": "old.dat",
+            "oldest_date": datetime(2025, 1, 1).date(),
+        }
+        stats.update(overrides)
+        return stats
+
+    # -- the docket's rehabilitation plan: the math -------------------
+
+    def test_dl_rehab_partition_and_totals(self):
+        folder = self.root / "dl"
+        self.seed_plan_folder(folder)
+        _files, stats, rehab = self.plan_for(folder)
+        self.assertEqual(
+            [step["count"] for step in rehab["steps"]], [2, 2, 10]
+        )
+        self.assertEqual(
+            [step["bytes"] for step in rehab["steps"]],
+            [10000, 17000, 40400],
+        )
+        # the partition never double-claims a file
+        self.assertEqual(
+            sum(step["count"] for step in rehab["steps"]),
+            rehab["removed_count"],
+        )
+        self.assertEqual(
+            sum(step["bytes"] for step in rehab["steps"]),
+            rehab["removed_bytes"],
+        )
+        # step 1 is exactly the cleanup order's provable waste
+        self.assertEqual(
+            rehab["steps"][0]["count"], stats["duplicate_extra"]
+        )
+        self.assertEqual(
+            rehab["steps"][0]["bytes"],
+            stats["duplicate_extra_bytes"],
+        )
+        # step 2 is the two installers alone: the ancient PDF is
+        # not an installer and falls through to the heavy step
+        self.assertEqual(rehab["removed_count"], 14)
+        self.assertEqual(rehab["removed_bytes"], 67400)
+        self.assertEqual(rehab["remaining_count"], 22)
+        self.assertEqual(rehab["projected_tier"], "Tidy Desk")
+        self.assertEqual(rehab["review_minutes"], 2)  # 14 * 5s
+        self.assertEqual(rehab["sessions"], 1)  # ceil(14 / 50)
+        self.assertIn(
+            "rehabilitable",
+            sj.downloads_rehab_closing(rehab, "Mild Clutter"),
+        )
+        # cumulative projected tiers never get worse down the plan
+        ranks = [
+            sj.dl_tier_rank(step["projected_tier"])
+            for step in rehab["steps"]
+        ]
+        self.assertEqual(ranks, sorted(ranks, reverse=True))
+
+    def test_dl_rehab_old_duplicate_installer_claimed_once(self):
+        folder = self.root / "dl"
+        write_sized(folder, "tool.exe", 4000,
+                    datetime(2026, 6, 1, 12, 0))
+        write_sized(folder, "tool (1).exe", 4000,
+                    datetime(2020, 1, 1, 12, 0))
+        _files, _stats, rehab = self.plan_for(folder)
+        # the extra copy is ancient AND an installer, but step 1
+        # claimed it; step 2 must not claim it again
+        self.assertEqual(
+            [step["count"] for step in rehab["steps"]], [1, 0, 0]
+        )
+        self.assertEqual(rehab["removed_count"], 1)
+        self.assertEqual(rehab["removed_bytes"], 4000)
+
+    def test_dl_rehab_heavy_step_needs_more_than_ten_standing(self):
+        folder = self.root / "dl"
+        for i in range(10):
+            write_sized(folder, f"file_{i}.dat", 1000,
+                        datetime(2026, 6, 1, 12, 0))
+        _files, _stats, rehab = self.plan_for(folder)
+        self.assertEqual(rehab["steps"][2]["count"], 0)
+        self.assertEqual(rehab["removed_count"], 0)
+
+    def test_dl_rehab_single_file_needs_no_plan(self):
+        folder = self.root / "dl"
+        write_sized(folder, "only.dat", 1000,
+                    datetime(2026, 6, 1, 12, 0))
+        _files, _stats, rehab = self.plan_for(folder)
+        self.assertEqual(rehab["removed_count"], 0)
+        self.assertEqual(rehab["remaining_count"], 1)
+        self.assertEqual(rehab["projected_tier"], "Tidy Desk")
+        self.assertEqual(rehab["review_minutes"], 0)
+        self.assertEqual(rehab["sessions"], 0)
+        self.assertIn(
+            "No rehabilitation required",
+            sj.downloads_rehab_closing(rehab, "Tidy Desk"),
+        )
+
+    def test_dl_rehab_voice_never_changes_the_math(self):
+        folder = self.root / "dl"
+        self.seed_plan_folder(folder)
+        files = sj.collect_downloads([folder])
+        stats = sj.analyze_downloads(files)
+        fair = sj.compute_downloads_rehabilitation(
+            files, stats, voice="fair"
+        )
+        strict = sj.compute_downloads_rehabilitation(
+            files, stats, voice="strict"
+        )
+        self.assertEqual(fair["removed_count"],
+                         strict["removed_count"])
+        self.assertEqual(fair["removed_bytes"],
+                         strict["removed_bytes"])
+        self.assertEqual(fair["projected_tier"],
+                         strict["projected_tier"])
+
+    # -- the docket's rehabilitation plan: the hearing ----------------
+
+    def test_dl_rehab_section_present(self):
+        folder = self.root / "dl"
+        self.seed_plan_folder(folder)
+        code, out, _ = self.run_main(
+            [str(folder), "--court", "downloads", "--rehab"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("THE REHABILITATION PLAN", out)
+        self.assertIn(
+            "Step 1 - Clear the duplicate extras: 2 files", out
+        )
+        self.assertIn(
+            "Step 2 - Retire the ancient installers: 2 files", out
+        )
+        self.assertIn(
+            "Step 3 - Move out the heavy evidence: 10 files", out
+        )
+        self.assertIn("After this step: 22 files remain", out)
+        self.assertIn(
+            "The court finds the defendant rehabilitable", out
+        )
+
+    def test_dl_rehab_section_absent_without_flag(self):
+        folder = self.root / "dl"
+        self.seed_plan_folder(folder)
+        code, out, _ = self.run_main(
+            [str(folder), "--court", "downloads"]
+        )
+        self.assertEqual(code, 0)
+        self.assertNotIn("REHABILITATION PLAN", out)
+        code, out, _ = self.run_main(
+            [str(folder), "--court", "downloads", "--json"]
+        )
+        self.assertEqual(code, 0)
+        self.assertNotIn("rehabilitation", json.loads(out))
+
+    def test_dl_rehab_single_file_terminal(self):
+        folder = self.root / "dl"
+        write_sized(folder, "only.dat", 1000,
+                    datetime(2026, 6, 1, 12, 0))
+        code, out, _ = self.run_main(
+            [str(folder), "--court", "downloads", "--rehab"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("No steps assigned", out)
+        self.assertIn("No rehabilitation required", out)
+
+    def test_dl_rehab_empty_folder(self):
+        empty = self.root / "empty"
+        empty.mkdir()
+        code, out, _ = self.run_main(
+            [str(empty), "--court", "downloads", "--rehab"]
+        )
         self.assertEqual(code, 2)
-        self.assertIn("--appeal", err)
-        self.assertIn("downloads court", err)
+        self.assertIn("No Evidence", out)
+        code, out, _ = self.run_main(
+            [str(empty), "--court", "downloads", "--rehab", "--json"]
+        )
+        self.assertEqual(code, 2)
+        data = json.loads(out)
+        self.assertEqual(data["verdict"], "No Evidence")
+        self.assertNotIn("rehabilitation", data)
+
+    def test_dl_rehab_json_shape(self):
+        folder = self.root / "dl"
+        self.seed_plan_folder(folder)
+        code, out, _ = self.run_main(
+            [str(folder), "--court", "downloads", "--rehab", "--json"]
+        )
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        # the verdict in the header remains the original
+        self.assertEqual(data["verdict"], "Mild Clutter")
+        rehab = data["rehabilitation"]
+        self.assertEqual(
+            set(rehab),
+            {"years", "steps", "removed_count", "removed_bytes",
+             "removed_human", "reclaim_share_pct", "remaining_count",
+             "projected_tier", "review_minutes", "sessions",
+             "outlook"},
+        )
+        self.assertEqual(
+            set(rehab["steps"][0]),
+            {"key", "name", "count", "bytes", "human",
+             "cumulative_count", "cumulative_bytes",
+             "remaining_count", "projected_tier"},
+        )
+        self.assertEqual(
+            [step["key"] for step in rehab["steps"]],
+            ["duplicate_extras", "ancient_installers",
+             "heavy_evidence"],
+        )
+        self.assertEqual(
+            [step["count"] for step in rehab["steps"]], [2, 2, 10]
+        )
+        self.assertEqual(rehab["removed_count"], 14)
+        self.assertEqual(rehab["removed_bytes"], 67400)
+        self.assertEqual(rehab["remaining_count"], 22)
+        self.assertEqual(rehab["projected_tier"], "Tidy Desk")
+        self.assertIn("rehabilitable", rehab["outlook"])
+
+    def test_dl_rehab_markdown_section(self):
+        folder = self.root / "dl"
+        self.seed_plan_folder(folder)
+        md_path = self.root / "report.md"
+        code, _, _ = self.run_main(
+            [str(folder), "--court", "downloads", "--rehab",
+             "--out", str(md_path)]
+        )
+        self.assertEqual(code, 0)
+        md = md_path.read_text(encoding="utf-8")
+        self.assertIn("## Rehabilitation Plan", md)
+        self.assertIn("Step 1 - Clear the duplicate extras", md)
+        self.assertIn("Step 2 - Retire the ancient installers", md)
+        self.assertIn("projected verdict of **Tidy Desk**", md)
+
+    def test_dl_rehab_composes_with_judge_and_intensity(self):
+        folder = self.root / "dl"
+        self.seed_plan_folder(folder)
+        code, out, _ = self.run_main(
+            [str(folder), "--court", "downloads", "--rehab",
+             "--judge", "strict", "--intensity", "roast"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("THE REHABILITATION PLAN", out)
+        self.assertIn("COMMENTARY:", out)
+
+    def test_dl_rehab_refusals(self):
+        folder = self.root / "dl"
+        self.seed_plan_folder(folder)
+        combos = [
+            ["--vs", str(folder)],
+            ["--vs-year", "2025"],
+            ["--rematch"],
+            ["--plea-bargain"],
+            ["--cleanup-list", str(self.root / "cleanup.txt")],
+            ["--wrapped-kit", str(self.root / "kit")],
+            ["--trend"],
+            ["--appeal"],
+            ["--grand-jury"],
+        ]
+        for extra in combos:
+            with self.subTest(extra=extra):
+                code, _, err = self.run_main(
+                    [str(folder), "--court", "downloads", "--rehab"]
+                    + extra
+                )
+                self.assertEqual(code, 2)
+                self.assertIn("not supported", err)
+                self.assertIn("--rehab", err)
+
+    def test_dl_screenshots_only_options_still_refused(self):
+        folder = self.root / "dl"
+        self.seed_plan_folder(folder)
+        for flag, extra in [
+            ("--plea-bargain", ["--plea-bargain"]),
+            ("--vs-year", ["--vs-year", "2025"]),
+            ("--judge-file", ["--judge-file", "pack.json"]),
+        ]:
+            with self.subTest(flag=flag):
+                code, _, err = self.run_main(
+                    [str(folder), "--court", "downloads"] + extra
+                )
+                self.assertEqual(code, 2)
+                self.assertIn(flag, err)
+                self.assertIn("downloads court", err)
+
+    # -- the docket's appeals court: the math -------------------------
+
+    def test_dl_appeal_neutral_record_denied(self):
+        appeal = sj.compute_downloads_appeal(
+            self.base_dl_stats(), "Digital Junk Drawer",
+            "Sentence: probation.",
+        )
+        self.assertEqual(appeal["mitigating"], [])
+        self.assertEqual(appeal["aggravating"], [])
+        self.assertEqual(appeal["net"], 0)
+        self.assertEqual(appeal["ruling"], "denied")
+        self.assertEqual(appeal["appealed_tier"],
+                         "Digital Junk Drawer")
+        self.assertEqual(appeal["appealed_sentence"],
+                         "Sentence: probation.")
+
+    def test_dl_appeal_all_mitigating_granted(self):
+        stats = self.base_dl_stats(
+            duplicate_extra=0, installer_count=1, archive_count=0,
+            old_share=5.0, total_bytes=10 * 1024 ** 2,
+            total_human="10.0 MB",
+        )
+        appeal = sj.compute_downloads_appeal(
+            stats, "Digital Junk Drawer", "Sentence: probation."
+        )
+        self.assertEqual(len(appeal["mitigating"]), 5)
+        self.assertEqual(len(appeal["aggravating"]), 0)
+        self.assertEqual(appeal["net"], 5)
+        self.assertEqual(appeal["ruling"], "granted")
+        self.assertEqual(appeal["appealed_tier"], "Mild Clutter")
+        self.assertEqual(appeal["appealed_sentence"],
+                         sj.DL_APPEAL_COMMUTED_SENTENCE)
+        self.assertIn(
+            "reduced on appeal from Digital Junk Drawer to "
+            "Mild Clutter",
+            sj.downloads_appeal_closing(appeal),
+        )
+
+    def test_dl_appeal_granted_at_the_floor_commutes(self):
+        stats = self.base_dl_stats(
+            duplicate_extra=0, installer_count=1, archive_count=0,
+            old_share=5.0, total_bytes=10 * 1024 ** 2,
+            total_human="10.0 MB",
+        )
+        appeal = sj.compute_downloads_appeal(
+            stats, "Tidy Desk", "Sentence: case dismissed."
+        )
+        self.assertEqual(appeal["ruling"], "granted")
+        self.assertEqual(appeal["appealed_tier"], "Tidy Desk")
+        self.assertEqual(appeal["appealed_sentence"],
+                         sj.DL_APPEAL_COMMUTED_SENTENCE)
+        self.assertIn(
+            "already the lowest on the ladder",
+            sj.downloads_appeal_closing(appeal),
+        )
+
+    def test_dl_appeal_commuted_band(self):
+        stats = self.base_dl_stats(
+            duplicate_extra=0, old_share=5.0
+        )
+        appeal = sj.compute_downloads_appeal(
+            stats, "Digital Junk Drawer", "Sentence: probation."
+        )
+        self.assertEqual(len(appeal["mitigating"]), 2)
+        self.assertEqual(appeal["net"], 2)
+        self.assertEqual(appeal["ruling"], "commuted")
+        self.assertEqual(appeal["appealed_tier"],
+                         "Digital Junk Drawer")
+        self.assertEqual(appeal["appealed_sentence"],
+                         sj.DL_APPEAL_COMMUTED_SENTENCE)
+
+    def test_dl_appeal_all_aggravating_denied(self):
+        stats = self.base_dl_stats(
+            duplicate_extra=5, duplicate_extra_bytes=9999,
+            installer_count=10, archive_count=15,
+            oldest_age_years=3, total_bytes=5 * 1024 ** 3,
+            total_human="5.0 GB", old_share=60.0,
+        )
+        appeal = sj.compute_downloads_appeal(
+            stats, "Hoarding Situation", "Sentence: hazmat."
+        )
+        self.assertEqual(len(appeal["mitigating"]), 0)
+        self.assertEqual(len(appeal["aggravating"]), 6)
+        self.assertEqual(appeal["net"], -6)
+        self.assertEqual(appeal["ruling"], "denied")
+        self.assertEqual(appeal["appealed_tier"],
+                         "Hoarding Situation")
+        self.assertEqual(appeal["appealed_sentence"],
+                         "Sentence: hazmat.")
+
+    def test_dl_appeal_factor_thresholds(self):
+        def keys(stats, kind):
+            appeal = sj.compute_downloads_appeal(
+                stats, "Mild Clutter", "Sentence: x."
+            )
+            return {f["key"] for f in appeal[kind]}
+
+        base = self.base_dl_stats()
+        # duplicate waste fires at five extras, not at four
+        self.assertNotIn(
+            "duplicate_waste",
+            keys({**base, "duplicate_extra": 4}, "aggravating"),
+        )
+        self.assertIn(
+            "duplicate_waste",
+            keys({**base, "duplicate_extra": 5}, "aggravating"),
+        )
+        # installer restraint holds at two, pileup starts at ten
+        self.assertIn(
+            "installer_restraint",
+            keys({**base, "installer_count": 2}, "mitigating"),
+        )
+        self.assertNotIn(
+            "installer_restraint",
+            keys({**base, "installer_count": 3}, "mitigating"),
+        )
+        self.assertNotIn(
+            "installer_pileup",
+            keys({**base, "installer_count": 9}, "aggravating"),
+        )
+        self.assertIn(
+            "installer_pileup",
+            keys({**base, "installer_count": 10}, "aggravating"),
+        )
+        # the time capsule fires at sixty percent, not below
+        self.assertNotIn(
+            "time_capsule",
+            keys({**base, "old_share": 59.9}, "aggravating"),
+        )
+        self.assertIn(
+            "time_capsule",
+            keys({**base, "old_share": 60.0}, "aggravating"),
+        )
+        # the relic fires at three years, not at two
+        self.assertNotIn(
+            "ancient_relic",
+            keys({**base, "oldest_age_years": 2}, "aggravating"),
+        )
+        self.assertIn(
+            "ancient_relic",
+            keys({**base, "oldest_age_years": 3}, "aggravating"),
+        )
+
+    # -- the docket's appeals court: the hearing ----------------------
+
+    def test_dl_appeal_granted_terminal(self):
+        folder = self.root / "dl"
+        self.seed_clean_docket(folder)
+        code, out, _ = self.run_main(
+            [str(folder), "--court", "downloads", "--appeal"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("THE APPEALS COURT", out)
+        self.assertIn("Mitigating factors (5)", out)
+        self.assertIn("Aggravating factors (0)", out)
+        self.assertIn("Original verdict               Mild Clutter",
+                      out)
+        self.assertIn("Verdict on appeal              Tidy Desk",
+                      out)
+        self.assertIn("Appeal granted", out)
+
+    def test_dl_appeal_denied_terminal(self):
+        folder = self.root / "dl"
+        self.seed_dirty_docket(folder)
+        code, out, _ = self.run_main(
+            [str(folder), "--court", "downloads", "--appeal"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("THE APPEALS COURT", out)
+        self.assertIn("Mitigating factors (2)", out)
+        self.assertIn("Aggravating factors (4)", out)
+        self.assertIn("Appeal denied", out)
+        self.assertIn("The verdict and the sentence stand", out)
+
+    def test_dl_appeal_section_absent_without_flag(self):
+        folder = self.root / "dl"
+        self.seed_clean_docket(folder)
+        code, out, _ = self.run_main(
+            [str(folder), "--court", "downloads"]
+        )
+        self.assertEqual(code, 0)
+        self.assertNotIn("APPEALS COURT", out)
+        code, out, _ = self.run_main(
+            [str(folder), "--court", "downloads", "--json"]
+        )
+        self.assertEqual(code, 0)
+        self.assertNotIn("appeal", json.loads(out))
+
+    def test_dl_appeal_empty_folder(self):
+        empty = self.root / "empty"
+        empty.mkdir()
+        code, out, _ = self.run_main(
+            [str(empty), "--court", "downloads", "--appeal", "--json"]
+        )
+        self.assertEqual(code, 2)
+        data = json.loads(out)
+        self.assertEqual(data["verdict"], "No Evidence")
+        self.assertNotIn("appeal", data)
+
+    def test_dl_appeal_json_shape(self):
+        folder = self.root / "dl"
+        self.seed_clean_docket(folder)
+        code, out, _ = self.run_main(
+            [str(folder), "--court", "downloads", "--appeal",
+             "--json"]
+        )
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        # the verdict in the header remains the original
+        self.assertEqual(data["verdict"], "Mild Clutter")
+        appeal = data["appeal"]
+        self.assertEqual(
+            set(appeal),
+            {"mitigating", "aggravating", "mitigating_count",
+             "aggravating_count", "net", "reduction_margin",
+             "commutation_margin", "ruling", "ruling_label",
+             "original_tier", "original_sentence", "appealed_tier",
+             "appealed_sentence", "closing"},
+        )
+        self.assertEqual(appeal["mitigating_count"], 5)
+        self.assertEqual(appeal["aggravating_count"], 0)
+        self.assertEqual(appeal["net"], 5)
+        self.assertEqual(appeal["ruling"], "granted")
+        self.assertEqual(appeal["original_tier"], "Mild Clutter")
+        self.assertEqual(appeal["appealed_tier"], "Tidy Desk")
+
+    def test_dl_appeal_markdown_section(self):
+        folder = self.root / "dl"
+        self.seed_clean_docket(folder)
+        md_path = self.root / "report.md"
+        code, _, _ = self.run_main(
+            [str(folder), "--court", "downloads", "--appeal",
+             "--out", str(md_path)]
+        )
+        self.assertEqual(code, 0)
+        md = md_path.read_text(encoding="utf-8")
+        self.assertIn("## Appeals Court", md)
+        self.assertIn("**Mitigating factors (5):**", md)
+        self.assertIn("Verdict on appeal: **Tidy Desk**", md)
+
+    def test_dl_appeal_composes_with_judge_and_intensity(self):
+        folder = self.root / "dl"
+        self.seed_clean_docket(folder)
+        code, out, _ = self.run_main(
+            [str(folder), "--court", "downloads", "--appeal",
+             "--judge", "strict", "--intensity", "roast"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("THE APPEALS COURT", out)
+        self.assertIn("COMMENTARY:", out)
+
+    def test_dl_appeal_refusals(self):
+        folder = self.root / "dl"
+        self.seed_clean_docket(folder)
+        combos = [
+            ["--vs", str(folder)],
+            ["--vs-year", "2025"],
+            ["--rematch"],
+            ["--plea-bargain"],
+            ["--cleanup-list", str(self.root / "cleanup.txt")],
+            ["--wrapped-kit", str(self.root / "kit")],
+            ["--trend"],
+            ["--rehab"],
+            ["--grand-jury"],
+        ]
+        for extra in combos:
+            with self.subTest(extra=extra):
+                code, _, err = self.run_main(
+                    [str(folder), "--court", "downloads", "--appeal"]
+                    + extra
+                )
+                self.assertEqual(code, 2)
+                self.assertIn("not supported", err)
+                self.assertIn("--appeal", err)
 
 
 # ---------------------------------------------------------------------------

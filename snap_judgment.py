@@ -45,7 +45,7 @@ try:
 except ModuleNotFoundError:  # Python 3.9 and 3.10 have no tomllib
     tomllib = None
 
-__version__ = "0.14.0"
+__version__ = "0.15.0"
 
 # ---------------------------------------------------------------------------
 # detection
@@ -2392,7 +2392,9 @@ def render_downloads_markdown(stats: dict, tier: str, sentence: str,
                               rematch: dict | None = None,
                               rematch_requested: bool = False,
                               versus: dict | None = None,
-                              trend: dict | None = None) -> str:
+                              trend: dict | None = None,
+                              rehab: dict | None = None,
+                              appeal: dict | None = None) -> str:
     out = [
         "# Snap Judgment - The Downloads Docket",
         "",
@@ -2453,6 +2455,10 @@ def render_downloads_markdown(stats: dict, tier: str, sentence: str,
         out.append("")
     if trend is not None:
         out += render_trend_markdown(trend, "files")
+    if rehab is not None:
+        out += render_downloads_rehabilitation_markdown(rehab, tier)
+    if appeal is not None:
+        out += render_downloads_appeal_markdown(appeal)
     out += [DL_FOOTER, ""]
     return "\n".join(out)
 
@@ -4543,6 +4549,537 @@ def render_downloads_comparison(main_stats: dict, main_tier: str,
 
 
 # ---------------------------------------------------------------------------
+# the docket's rehabilitation plan and appeals court: the two newest
+# proceedings, heard in the downloads court on its own evidence
+# ---------------------------------------------------------------------------
+
+DL_APPEAL_COMMUTED_SENTENCE = (
+    "Sentence on appeal: commuted to time served. The downloads "
+    "folder is released on its own recognizance."
+)
+
+
+def compute_downloads_rehabilitation(files: list, stats: dict,
+                                     voice: str = "fair") -> dict:
+    """The docket's staged cleanup plan, the downloads court's own
+    hearing of --rehab. The files are partitioned into three steps,
+    in order, and every file is claimed by at most one step:
+
+    1. duplicate extras: every duplicate-download extra copy, the
+       provable waste the cleanup order already lists (every group
+       member except the keeper);
+    2. ancient installers: installers older than REHAB_YEARS years,
+       measured from the newest file in the folder, that step 1 did
+       not already claim - an installer's work is done the day it
+       runs, so an old one is dead weight in a way an old document
+       is not;
+    3. heavy evidence: the REHAB_HEAVY_COUNT largest files still
+       standing after the first two steps, assigned only when more
+       than that many would remain.
+
+    Each step reports its own files and bytes and the cumulative
+    position after serving it: how much evidence remains and what
+    verdict the remainder would earn on the docket's own ladder.
+    Purely a plan; this court deletes, moves, and modifies nothing,
+    ever."""
+    total_bytes = sum(f.size for f in files)
+    newest_date = max(f.dt.date() for f in files)
+    cutoff = _minus_years(newest_date, REHAB_YEARS)
+
+    duplicate_paths = set(stats["duplicate_extra_paths"])
+    duplicate_ids = {
+        id(f) for f in files if f.path in duplicate_paths
+    }
+
+    ancient_ids = {
+        id(f) for f in files
+        if id(f) not in duplicate_ids
+        and f.ext in DL_INSTALLER_EXTS
+        and f.dt.date() < cutoff
+    }
+
+    claimed = duplicate_ids | ancient_ids
+    pool = [f for f in files if id(f) not in claimed]
+    heavy_ids = set()
+    if len(pool) > REHAB_HEAVY_COUNT:
+        heavy = sorted(
+            pool, key=lambda f: (-f.size, f.mtime, f.name)
+        )[:REHAB_HEAVY_COUNT]
+        heavy_ids = {id(f) for f in heavy}
+
+    step_specs = [
+        ("duplicate_extras", "Clear the duplicate extras",
+         "Every duplicate download beyond the keeper of each "
+         "duplicate chain.",
+         duplicate_ids),
+        ("ancient_installers", "Retire the ancient installers",
+         f"Installers older than {REHAB_YEARS} years, measured "
+         f"from the newest file, that step 1 did not claim.",
+         ancient_ids),
+        ("heavy_evidence", "Move out the heavy evidence",
+         f"The {REHAB_HEAVY_COUNT} largest files still standing "
+         f"after the first two steps.",
+         heavy_ids),
+    ]
+    steps = []
+    cumulative_count = 0
+    cumulative_bytes = 0
+    for key, name, detail, ids in step_specs:
+        members = [f for f in files if id(f) in ids]
+        step_bytes = sum(f.size for f in members)
+        cumulative_count += len(members)
+        cumulative_bytes += step_bytes
+        remaining = len(files) - cumulative_count
+        projected_tier, _sentence = downloads_verdict_for(
+            remaining, voice=voice
+        )
+        steps.append({
+            "key": key,
+            "name": name,
+            "detail": detail,
+            "count": len(members),
+            "bytes": step_bytes,
+            "human": human_bytes(step_bytes),
+            "cumulative_count": cumulative_count,
+            "cumulative_bytes": cumulative_bytes,
+            "remaining_count": remaining,
+            "projected_tier": projected_tier,
+        })
+    removed_count = cumulative_count
+    removed_bytes = cumulative_bytes
+    remaining_count = len(files) - removed_count
+    projected_tier, _sentence = downloads_verdict_for(
+        remaining_count, voice=voice
+    )
+    review_minutes = (
+        -(-removed_count * REHAB_REVIEW_SECONDS // 60) if removed_count
+        else 0
+    )
+    sessions = (
+        -(-removed_count // REHAB_SESSION_SIZE) if removed_count else 0
+    )
+    return {
+        "years": REHAB_YEARS,
+        "cutoff": cutoff,
+        "steps": steps,
+        "removed_count": removed_count,
+        "removed_bytes": removed_bytes,
+        "removed_human": human_bytes(removed_bytes),
+        "reclaim_share_pct": (
+            round(100.0 * removed_bytes / total_bytes, 1)
+            if total_bytes else 0.0
+        ),
+        "remaining_count": remaining_count,
+        "projected_tier": projected_tier,
+        "review_seconds_per_file": REHAB_REVIEW_SECONDS,
+        "review_minutes": review_minutes,
+        "session_size": REHAB_SESSION_SIZE,
+        "sessions": sessions,
+    }
+
+
+def downloads_rehab_closing(rehab: dict, current_tier: str) -> str:
+    """The docket's outlook on the plan, in the plea closing's
+    style."""
+    if rehab["removed_count"] == 0:
+        return (
+            "No rehabilitation required. The desk is already as "
+            "clean as this court can ask."
+        )
+    if dl_tier_rank(rehab["projected_tier"]) < dl_tier_rank(
+        current_tier
+    ):
+        return (
+            "The court finds the defendant rehabilitable: serve "
+            "the plan and the verdict improves."
+        )
+    return (
+        "The plan reclaims space but not standing: the verdict "
+        "would hold. Rehabilitation is its own reward."
+    )
+
+
+def render_downloads_rehabilitation(rehab: dict,
+                                    current_tier: str) -> str:
+    """The terminal REHABILITATION PLAN section the docket prints
+    for --rehab."""
+    out = [
+        "THE REHABILITATION PLAN",
+        "  The docket assigns the following plan, in order. Each "
+        "step claims",
+        "  only files no earlier step claimed, and nothing is "
+        "deleted, moved,",
+        "  or modified by this court; the plan is yours to serve.",
+    ]
+    active = [step for step in rehab["steps"] if step["count"]]
+    if not active:
+        out.append("  No steps assigned: there is nothing to clear.")
+    for index, step in enumerate(active, start=1):
+        out += [
+            f"  Step {index} - {step['name']}: {step['count']:,} "
+            f"files, {step['human']} ({step['bytes']:,} bytes)",
+            f"    {step['detail']}",
+            f"    After this step: {step['remaining_count']:,} "
+            f"files remain (projected verdict: "
+            f"{step['projected_tier']})",
+        ]
+    out += [
+        f"  {'Files assigned':<30} {rehab['removed_count']:,}",
+        f"  {'Space reclaimed':<30} {rehab['removed_human']} "
+        f"({rehab['removed_bytes']:,} bytes, "
+        f"{rehab['reclaim_share_pct']:.1f}% of the evidence)",
+        f"  {'Remaining evidence':<30} "
+        f"{rehab['remaining_count']:,} files",
+        f"  {'Projected verdict':<30} {rehab['projected_tier']}",
+        f"  {'Estimated review time':<30} {rehab['review_minutes']:,} "
+        f"minute{'s' if rehab['review_minutes'] != 1 else ''} at "
+        f"{rehab['review_seconds_per_file']} seconds per file",
+        f"  {'Sessions to serve':<30} {rehab['sessions']:,} "
+        f"(at most {rehab['session_size']} files per session)",
+        "",
+        f"  {downloads_rehab_closing(rehab, current_tier)}",
+        "",
+    ]
+    return "\n".join(out)
+
+
+def downloads_rehab_json(rehab: dict, current_tier: str) -> dict:
+    """The docket's rehabilitation plan as it appears in --json."""
+    return {
+        "years": rehab["years"],
+        "steps": [
+            {
+                "key": step["key"],
+                "name": step["name"],
+                "count": step["count"],
+                "bytes": step["bytes"],
+                "human": step["human"],
+                "cumulative_count": step["cumulative_count"],
+                "cumulative_bytes": step["cumulative_bytes"],
+                "remaining_count": step["remaining_count"],
+                "projected_tier": step["projected_tier"],
+            }
+            for step in rehab["steps"]
+        ],
+        "removed_count": rehab["removed_count"],
+        "removed_bytes": rehab["removed_bytes"],
+        "removed_human": rehab["removed_human"],
+        "reclaim_share_pct": rehab["reclaim_share_pct"],
+        "remaining_count": rehab["remaining_count"],
+        "projected_tier": rehab["projected_tier"],
+        "review_minutes": rehab["review_minutes"],
+        "sessions": rehab["sessions"],
+        "outlook": downloads_rehab_closing(rehab, current_tier),
+    }
+
+
+def render_downloads_rehabilitation_markdown(
+    rehab: dict, current_tier: str
+) -> list[str]:
+    """The '## Rehabilitation Plan' section lines for the docket's
+    --out report."""
+    out = ["## Rehabilitation Plan", ""]
+    out.append(
+        "The docket assigns the following plan, in order. Each "
+        "step claims only files no earlier step claimed, and "
+        "nothing is deleted, moved, or modified by this court; "
+        "the plan is yours to serve."
+    )
+    out.append("")
+    active = [step for step in rehab["steps"] if step["count"]]
+    if not active:
+        out.append("No steps assigned: there is nothing to clear.")
+    for index, step in enumerate(active, start=1):
+        out.append(
+            f"- **Step {index} - {step['name']}:** "
+            f"{step['count']:,} files, {step['human']} "
+            f"({step['bytes']:,} bytes). {step['detail']} After "
+            f"this step: {step['remaining_count']:,} files remain "
+            f"(projected verdict: **{step['projected_tier']}**)."
+        )
+    out += [
+        "",
+        f"Serving the whole plan would assign "
+        f"{rehab['removed_count']:,} files and reclaim "
+        f"{rehab['removed_human']} ({rehab['removed_bytes']:,} "
+        f"bytes, {rehab['reclaim_share_pct']:.1f}% of the "
+        f"evidence), leaving {rehab['remaining_count']:,} files "
+        f"and a projected verdict of "
+        f"**{rehab['projected_tier']}**. Estimated review time: "
+        f"{rehab['review_minutes']:,} "
+        f"minute{'s' if rehab['review_minutes'] != 1 else ''} at "
+        f"{rehab['review_seconds_per_file']} seconds per file, in "
+        f"{rehab['sessions']:,} "
+        f"session{'s' if rehab['sessions'] != 1 else ''} of at "
+        f"most {rehab['session_size']} files.",
+        "",
+        downloads_rehab_closing(rehab, current_tier),
+        "",
+    ]
+    return out
+
+
+def compute_downloads_appeal(stats: dict, tier: str,
+                             sentence: str) -> dict:
+    """The docket's re-hearing of its verdict on its factors.
+    Every statistic the docket already computed is entered as a
+    mitigating factor (it argues for mercy) or an aggravating
+    factor (it argues against), each with its evidence, and the
+    panel rules by the same stated rule as the screenshots court,
+    never by vibes:
+
+    - mitigating factors outnumber aggravating factors by
+      APPEAL_REDUCTION_MARGIN or more: the appeal is granted and
+      the verdict is reduced by exactly one rung on the docket's
+      ladder (never below Tidy Desk, where it stands and the
+      sentence is commuted instead);
+    - mitigating factors outnumber aggravating factors by at least
+      APPEAL_COMMUTATION_MARGIN: the verdict stands and the
+      sentence is commuted;
+    - otherwise: the appeal is denied and both stand.
+
+    The factor thresholds are the docket's own evidence bands, the
+    same ones its awards already honor: a duplicate pileup is five
+    or more extra copies, an installer pileup is ten or more, an
+    archive hoard is fifteen or more, a relic is three years old,
+    a landfill is five gigabytes, a time capsule is sixty percent
+    over a year old. The original verdict and sentence are always
+    reported beside the appealed ones: an appeal re-hears the
+    case, it does not rewrite the record."""
+    mitigating = []
+    aggravating = []
+
+    def factor(key, name, evidence):
+        return {"key": key, "name": name, "evidence": evidence}
+
+    if stats["duplicate_extra"] == 0:
+        mitigating.append(factor(
+            "no_duplicate_waste", "No duplicate waste",
+            "Not one duplicate download in the evidence.",
+        ))
+    if stats["installer_count"] <= 2:
+        n = stats["installer_count"]
+        mitigating.append(factor(
+            "installer_restraint", "Installer restraint",
+            f"Only {n} installer{'s' if n != 1 else ''} kept on "
+            f"disk: the boxes went out with the software.",
+        ))
+    if stats["archive_count"] <= 2:
+        n = stats["archive_count"]
+        mitigating.append(factor(
+            "few_unopened_archives", "Few unopened archives",
+            f"Only {n} archive{'s' if n != 1 else ''} still zipped.",
+        ))
+    if stats["old_share"] < 10:
+        mitigating.append(factor(
+            "little_ancient_evidence", "Little ancient evidence",
+            f"Only {stats['old_share']:.1f}% of the files are "
+            f"over a year old.",
+        ))
+    if stats["total_bytes"] < 100 * 1024 ** 2:
+        mitigating.append(factor(
+            "a_light_load", "A light load",
+            f"The whole docket weighs {stats['total_human']}.",
+        ))
+
+    if stats["duplicate_extra"] >= 5:
+        aggravating.append(factor(
+            "duplicate_waste", "Duplicate waste",
+            f"{stats['duplicate_extra']:,} extra copies of files "
+            f"the defendant already had, "
+            f"{human_bytes(stats['duplicate_extra_bytes'])} of "
+            f"wasted evidence.",
+        ))
+    if stats["installer_count"] >= 10:
+        aggravating.append(factor(
+            "installer_pileup", "An installer pileup",
+            f"{stats['installer_count']:,} installers "
+            f"({stats['installer_human']}) kept after their work "
+            f"was done.",
+        ))
+    if stats["oldest_age_years"] >= 3:
+        aggravating.append(factor(
+            "ancient_relic", "An ancient relic",
+            f"{stats['oldest_name']} dates to "
+            f"{_fmt_date(stats['oldest_date'])}, over three years "
+            f"ago, and it is still here.",
+        ))
+    if stats["archive_count"] >= 15:
+        aggravating.append(factor(
+            "archive_hoard", "An archive hoard",
+            f"{stats['archive_count']:,} archives on disk, still "
+            f"zipped. Whatever is inside them, it is staying "
+            f"inside them.",
+        ))
+    if stats["total_bytes"] >= 5 * 1024 ** 3:
+        aggravating.append(factor(
+            "gigabyte_landfill", "A gigabyte landfill",
+            f"The downloads alone total {stats['total_human']}.",
+        ))
+    if stats["old_share"] >= 60:
+        aggravating.append(factor(
+            "time_capsule", "A time capsule",
+            f"{stats['old_share']:.1f}% of these files are over "
+            f"a year old. This is less a folder than a stratum.",
+        ))
+
+    net = len(mitigating) - len(aggravating)
+    rank = dl_tier_rank(tier)
+    if net >= APPEAL_REDUCTION_MARGIN:
+        ruling = "granted"
+        appealed_tier = DL_TIER_ORDER[max(0, rank - 1)]
+        appealed_sentence = DL_APPEAL_COMMUTED_SENTENCE
+    elif net >= APPEAL_COMMUTATION_MARGIN:
+        ruling = "commuted"
+        appealed_tier = tier
+        appealed_sentence = DL_APPEAL_COMMUTED_SENTENCE
+    else:
+        ruling = "denied"
+        appealed_tier = tier
+        appealed_sentence = sentence
+    return {
+        "mitigating": mitigating,
+        "aggravating": aggravating,
+        "net": net,
+        "reduction_margin": APPEAL_REDUCTION_MARGIN,
+        "commutation_margin": APPEAL_COMMUTATION_MARGIN,
+        "ruling": ruling,
+        "original_tier": tier,
+        "original_sentence": sentence,
+        "appealed_tier": appealed_tier,
+        "appealed_sentence": appealed_sentence,
+    }
+
+
+def downloads_appeal_closing(appeal: dict) -> str:
+    """The docket panel's reasoning, stated with the counts it
+    rests on."""
+    mitigating_count = len(appeal["mitigating"])
+    aggravating_count = len(appeal["aggravating"])
+    if appeal["ruling"] == "granted":
+        if appeal["appealed_tier"] != appeal["original_tier"]:
+            return (
+                f"Appeal granted. The mitigating factors "
+                f"outweighed the aggravating {mitigating_count} "
+                f"to {aggravating_count}, and under the "
+                f"{appeal['reduction_margin']}-factor rule the "
+                f"verdict is reduced on appeal from "
+                f"{appeal['original_tier']} to "
+                f"{appeal['appealed_tier']}. The original verdict "
+                f"stays in the court record."
+            )
+        return (
+            f"Appeal granted. The mitigating factors outweighed "
+            f"the aggravating {mitigating_count} to "
+            f"{aggravating_count}, but the verdict is already "
+            f"the lowest on the ladder, so it stands at "
+            f"{appeal['original_tier']} and the sentence is "
+            f"commuted instead."
+        )
+    if appeal["ruling"] == "commuted":
+        return (
+            f"Appeal heard. The mitigating factors outweighed "
+            f"the aggravating {mitigating_count} to "
+            f"{aggravating_count}: not enough for a reduction "
+            f"under the {appeal['reduction_margin']}-factor "
+            f"rule, but enough to commute the sentence. The "
+            f"verdict stands at {appeal['original_tier']}."
+        )
+    return (
+        f"Appeal denied. The aggravating factors matched or "
+        f"outweighed the mitigating, {aggravating_count} to "
+        f"{mitigating_count}. The verdict and the sentence stand."
+    )
+
+
+def render_downloads_appeal(appeal: dict) -> str:
+    """The terminal APPEALS COURT section the docket prints for
+    --appeal."""
+    out = [
+        "THE APPEALS COURT",
+        "  The docket re-hears the verdict on its factors. "
+        "Mitigating",
+        "  factors argue for mercy; aggravating factors argue",
+        f"  against. Under the {appeal['reduction_margin']}-factor "
+        "rule, mitigating",
+        "  factors must outnumber aggravating factors by that many",
+        "  to reduce the verdict by one rung; outnumbering them at",
+        "  all commutes the sentence.",
+    ]
+    for kind in ("mitigating", "aggravating"):
+        factors = appeal[kind]
+        out.append(f"  {kind.capitalize()} factors ({len(factors)})")
+        if not factors:
+            out.append("    - none entered")
+        for entry in factors:
+            out.append(f"    - {entry['name']}: {entry['evidence']}")
+    out += [
+        f"  {'Original verdict':<30} {appeal['original_tier']}",
+        f"  {'Ruling':<30} "
+        f"{APPEAL_RULING_LABELS[appeal['ruling']]}",
+        f"  {'Verdict on appeal':<30} {appeal['appealed_tier']}",
+        f"  {'Sentence on appeal':<30} "
+        f"{appeal['appealed_sentence']}",
+        "",
+        f"  {downloads_appeal_closing(appeal)}",
+        "",
+    ]
+    return "\n".join(out)
+
+
+def downloads_appeal_json(appeal: dict) -> dict:
+    """The docket's appeal as it appears in --json."""
+    return {
+        "mitigating": appeal["mitigating"],
+        "aggravating": appeal["aggravating"],
+        "mitigating_count": len(appeal["mitigating"]),
+        "aggravating_count": len(appeal["aggravating"]),
+        "net": appeal["net"],
+        "reduction_margin": appeal["reduction_margin"],
+        "commutation_margin": appeal["commutation_margin"],
+        "ruling": appeal["ruling"],
+        "ruling_label": APPEAL_RULING_LABELS[appeal["ruling"]],
+        "original_tier": appeal["original_tier"],
+        "original_sentence": appeal["original_sentence"],
+        "appealed_tier": appeal["appealed_tier"],
+        "appealed_sentence": appeal["appealed_sentence"],
+        "closing": downloads_appeal_closing(appeal),
+    }
+
+
+def render_downloads_appeal_markdown(appeal: dict) -> list[str]:
+    """The '## Appeals Court' section lines for the docket's --out
+    report."""
+    out = ["## Appeals Court", ""]
+    out.append(
+        f"The docket re-hears the verdict on its factors. Under "
+        f"the {appeal['reduction_margin']}-factor rule, "
+        f"mitigating factors must outnumber aggravating factors "
+        f"by that many to reduce the verdict by one rung; "
+        f"outnumbering them at all commutes the sentence."
+    )
+    for kind in ("mitigating", "aggravating"):
+        factors = appeal[kind]
+        out += ["", f"**{kind.capitalize()} factors "
+                    f"({len(factors)}):**", ""]
+        if not factors:
+            out.append("- none entered")
+        for entry in factors:
+            out.append(f"- **{entry['name']}:** {entry['evidence']}")
+    out += [
+        "",
+        f"Original verdict: **{appeal['original_tier']}**. "
+        f"Ruling: **{APPEAL_RULING_LABELS[appeal['ruling']]}**. "
+        f"Verdict on appeal: **{appeal['appealed_tier']}**. "
+        f"{appeal['appealed_sentence']}",
+        "",
+        downloads_appeal_closing(appeal),
+        "",
+    ]
+    return out
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -4903,11 +5440,12 @@ def build_parser() -> argparse.ArgumentParser:
                         help="also assign a rehabilitation plan: a "
                              "staged cleanup plan (duplicate extras, "
                              "then ancient evidence, then the largest "
-                             "remaining screenshots) with the space "
-                             "each step reclaims, the projected verdict "
-                             "after each step, a review-time estimate, "
-                             "and a session schedule (nothing is "
-                             "actually deleted)")
+                             "remaining files; in the downloads court "
+                             "the ancient step is ancient installers) "
+                             "with the space each step reclaims, the "
+                             "projected verdict after each step, a "
+                             "review-time estimate, and a session "
+                             "schedule (nothing is actually deleted)")
     parser.add_argument("--appeal", action="store_true",
                         help="also convene the appeals court: the "
                              "verdict is re-heard on its mitigating "
@@ -4960,8 +5498,6 @@ def _run_downloads_court(args) -> int:
     unsupported = [
         ("--vs-year", args.vs_year is not None),
         ("--plea-bargain", bool(args.plea_bargain)),
-        ("--rehab", bool(args.rehab)),
-        ("--appeal", bool(args.appeal)),
         ("--judge-file", args.judge_file is not None),
     ]
     for flag, present in unsupported:
@@ -5246,6 +5782,21 @@ def _run_downloads_court(args) -> int:
             stats["total_bytes"], tier,
         )
 
+    dl_rehab = None
+    if args.rehab:
+        # The docket's own rehabilitation plan: duplicate extras,
+        # ancient installers, heavy evidence, projected on the
+        # docket's ladder. Nothing is ever deleted.
+        dl_rehab = compute_downloads_rehabilitation(
+            files, stats, voice=voice
+        )
+
+    dl_appeal = None
+    if args.appeal:
+        # The docket's own appeals court: the verdict re-heard on
+        # the docket's factors, ruled by the same stated rule.
+        dl_appeal = compute_downloads_appeal(stats, tier, sentence)
+
     if args.card:
         Path(args.card).write_text(
             render_downloads_card(stats, tier, sentence, awards),
@@ -5281,6 +5832,7 @@ def _run_downloads_court(args) -> int:
                 commentary=commentary, year=year,
                 rematch=rematch, rematch_requested=args.rematch,
                 versus=versus, trend=trend,
+                rehab=dl_rehab, appeal=dl_appeal,
             ),
             encoding="utf-8",
         )
@@ -5325,6 +5877,12 @@ def _run_downloads_court(args) -> int:
             }
         if trend is not None:
             data["trend"] = trend_json(trend)
+        if dl_rehab is not None:
+            data["rehabilitation"] = downloads_rehab_json(
+                dl_rehab, tier
+            )
+        if dl_appeal is not None:
+            data["appeal"] = downloads_appeal_json(dl_appeal)
         if year is not None:
             data["year"] = year
         if cleanup is not None:
@@ -5372,6 +5930,10 @@ def _run_downloads_court(args) -> int:
                 ))
             if args.rematch:
                 print(render_downloads_rematch_section(rematch, tier))
+            if dl_rehab is not None:
+                print(render_downloads_rehabilitation(dl_rehab, tier))
+            if dl_appeal is not None:
+                print(render_downloads_appeal(dl_appeal))
             if cleanup is not None:
                 print(
                     f"  CLEANUP ORDER: {cleanup['count']} files "
