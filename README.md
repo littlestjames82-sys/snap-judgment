@@ -29,10 +29,9 @@ with a combined FULL DOCKET ruling: both verdicts, the combined evidence,
 and a standing line keyed to the pair. See [The grand jury](#the-grand-jury)
 below.
 
-New in v0.12.0:
+New in v0.13.0:
 
-- `--trend`: your verdict trajectory from the court record, hearing over hearing.
-- Downloads co-defendants: `--court downloads --vs FOLDER` tries two downloads folders against each other.
+- `--rehab`: the rehabilitation plan. A staged cleanup plan (duplicate extras, then ancient evidence, then the largest remaining screenshots) with the space each step reclaims, the projected verdict after each step, a review-time estimate, and a session schedule. Nothing is deleted; the court assigns the plan, you serve it. See [The rehabilitation plan](#the-rehabilitation-plan) below.
 
 ## Install
 
@@ -72,6 +71,7 @@ snapjudgment ~/Downloads --court downloads --recursive  # the docket judges subf
 snapjudgment ~/Pictures --cleanup-list cleanup.txt  # the cleanup order: the exact files a plea bargain would remove
 snapjudgment ~/Pictures --plea-bargain   # the hypothetical verdict if you deleted the old and the duplicated
 snapjudgment ~/Pictures --rematch        # compare this hearing with the last one on record
+snapjudgment ~/Pictures --rehab          # the rehabilitation plan: a staged cleanup plan with a projected verdict per step
 snapjudgment ~/Pictures --badge badge.svg  # a shields-style verdict badge for your README
 snapjudgment ~/Pictures --fail-above "Repeat Offender"  # exit 1 if the verdict ranks above this tier
 snapjudgment ~/Pictures --oneline        # print exactly one summary line
@@ -233,6 +233,40 @@ when both are given they always agree, because they are the same
 computation. The court issues the order; it does not swing the axe
 itself. What you do with the list is your business.
 
+### The rehabilitation plan
+
+`--rehab` turns the sentence into homework: a staged cleanup plan,
+served in order, that shows the verdict improving step by step
+instead of only at the end. The screenshots are partitioned into
+three steps, and every screenshot is claimed by at most one step:
+
+1. **Clear the duplicate extras** - every duplicate suspect beyond
+   one keeper per exact size-and-dimension group.
+2. **Retire the ancient evidence** - screenshots older than two
+   years, measured from the newest screenshot, that step 1 did not
+   already claim. (The plea bargain counts an old duplicate as old;
+   the plan never assigns the same file twice.)
+3. **Move out the heavy evidence** - the ten largest screenshots
+   still standing after the first two steps, assigned only when
+   more than ten would remain.
+
+Each step reports its files and bytes and the cumulative position
+after serving it: how much evidence remains and what verdict the
+remainder would earn. The plan closes with the totals (files
+assigned, space reclaimed and its share of the evidence, the
+projected verdict), an estimated review time at five seconds per
+file, a session schedule of at most fifty files per session, and
+the court's outlook: no rehabilitation required when nothing is
+assigned, rehabilitable when finishing the plan improves the
+verdict, and space-but-not-standing when it would not. The plan
+appears in the terminal report, as a `rehabilitation` object in
+`--json`, and as a section of the Markdown report, and it composes
+with `--judge` and `--intensity`. It does not combine with the
+comparison, plea, cleanup-order, wrapped-kit, trend, rematch, or
+grand-jury proceedings, and the downloads docket refuses it; both
+refuse with a plain error. Like everything else in this court, the
+plan is read-only: Snap Judgment assigns it and deletes nothing.
+
 ### The downloads docket
 
 `--court downloads` convenes a second court for the folder where good
@@ -276,7 +310,8 @@ archive, or other), the `--since` / `--until` date filters, and the
 court record all work in this court. The cleanup order works here
 too, listing only the provable waste: the duplicate-download extra
 copies, every group member except the keeper. Only the comparisons
-(`--vs`, `--vs-year`), the plea bargain, and judge packs
+(`--vs`, `--vs-year`), the plea bargain, the rehabilitation plan
+(`--rehab`), and judge packs
 (`--judge-file`) are refused with a plain error, because they belong
 to the screenshots court's evidence. A sample hearing is at
 `examples/downloads-demo-output.txt`. `--court` can also live in the

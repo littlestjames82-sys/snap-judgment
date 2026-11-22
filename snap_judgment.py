@@ -45,7 +45,7 @@ try:
 except ModuleNotFoundError:  # Python 3.9 and 3.10 have no tomllib
     tomllib = None
 
-__version__ = "0.12.0"
+__version__ = "0.13.0"
 
 # ---------------------------------------------------------------------------
 # detection
@@ -1356,6 +1356,267 @@ def render_plea_bargain(plea: dict, current_tier: str) -> str:
         "",
     ]
     return "\n".join(out)
+
+
+# ---------------------------------------------------------------------------
+# the rehabilitation plan: the sentence, served in stages
+# ---------------------------------------------------------------------------
+
+REHAB_YEARS = 2
+REHAB_HEAVY_COUNT = 10
+REHAB_REVIEW_SECONDS = 5
+REHAB_SESSION_SIZE = 50
+
+
+def compute_rehabilitation(shots: list[Shot],
+                           voice: str = "fair") -> dict:
+    """A staged cleanup plan, assigned by the court and served by the
+    defendant. The screenshots are partitioned into three steps, in
+    order, and every screenshot is claimed by at most one step:
+
+    1. duplicate extras: every duplicate suspect beyond one keeper
+       per exact size+dimensions group (as in the plea bargain);
+    2. ancient evidence: the screenshots older than REHAB_YEARS
+       years, measured from the newest screenshot, that step 1 did
+       not already claim (the plea bargain counts an old duplicate
+       as old; the plan never assigns the same file twice);
+    3. heavy evidence: the REHAB_HEAVY_COUNT largest screenshots
+       still standing after the first two steps, assigned only when
+       more than that many would remain.
+
+    Each step reports its own files and bytes and the cumulative
+    position after serving it: how much evidence remains and what
+    verdict the remainder would earn. Purely a plan; this court
+    deletes, moves, and modifies nothing, ever."""
+    total_bytes = sum(s.size for s in shots)
+    newest_date = max(s.dt.date() for s in shots)
+    cutoff = _minus_years(newest_date, REHAB_YEARS)
+
+    groups: dict = defaultdict(list)
+    for s in shots:
+        if s.dims is not None:
+            groups[(s.size, s.dims)].append(s)
+    duplicate_ids = set()
+    for members in groups.values():
+        if len(members) >= 2:
+            members = sorted(members, key=lambda s: (s.mtime, s.name))
+            duplicate_ids.update(id(s) for s in members[1:])
+
+    ancient_ids = {
+        id(s) for s in shots
+        if id(s) not in duplicate_ids and s.dt.date() < cutoff
+    }
+
+    claimed = duplicate_ids | ancient_ids
+    pool = [s for s in shots if id(s) not in claimed]
+    heavy_ids = set()
+    if len(pool) > REHAB_HEAVY_COUNT:
+        heavy = sorted(
+            pool, key=lambda s: (-s.size, s.mtime, s.name)
+        )[:REHAB_HEAVY_COUNT]
+        heavy_ids = {id(s) for s in heavy}
+
+    step_specs = [
+        ("duplicate_extras", "Clear the duplicate extras",
+         "Every duplicate suspect beyond one keeper per exact "
+         "size-and-dimensions group.",
+         duplicate_ids),
+        ("ancient_evidence", "Retire the ancient evidence",
+         f"Screenshots older than {REHAB_YEARS} years, measured "
+         f"from the newest screenshot, that step 1 did not claim.",
+         ancient_ids),
+        ("heavy_evidence", "Move out the heavy evidence",
+         f"The {REHAB_HEAVY_COUNT} largest screenshots still "
+         f"standing after the first two steps.",
+         heavy_ids),
+    ]
+    steps = []
+    cumulative_count = 0
+    cumulative_bytes = 0
+    for key, name, detail, ids in step_specs:
+        members = [s for s in shots if id(s) in ids]
+        step_bytes = sum(s.size for s in members)
+        cumulative_count += len(members)
+        cumulative_bytes += step_bytes
+        remaining = len(shots) - cumulative_count
+        projected_tier, _sentence = verdict_for(remaining, voice=voice)
+        steps.append({
+            "key": key,
+            "name": name,
+            "detail": detail,
+            "count": len(members),
+            "bytes": step_bytes,
+            "human": human_bytes(step_bytes),
+            "cumulative_count": cumulative_count,
+            "cumulative_bytes": cumulative_bytes,
+            "remaining_count": remaining,
+            "projected_tier": projected_tier,
+        })
+    removed_count = cumulative_count
+    removed_bytes = cumulative_bytes
+    remaining_count = len(shots) - removed_count
+    projected_tier, _sentence = verdict_for(remaining_count, voice=voice)
+    review_minutes = (
+        -(-removed_count * REHAB_REVIEW_SECONDS // 60) if removed_count
+        else 0
+    )
+    sessions = (
+        -(-removed_count // REHAB_SESSION_SIZE) if removed_count else 0
+    )
+    return {
+        "years": REHAB_YEARS,
+        "cutoff": cutoff,
+        "steps": steps,
+        "removed_count": removed_count,
+        "removed_bytes": removed_bytes,
+        "removed_human": human_bytes(removed_bytes),
+        "reclaim_share_pct": (
+            round(100.0 * removed_bytes / total_bytes, 1)
+            if total_bytes else 0.0
+        ),
+        "remaining_count": remaining_count,
+        "projected_tier": projected_tier,
+        "review_seconds_per_file": REHAB_REVIEW_SECONDS,
+        "review_minutes": review_minutes,
+        "session_size": REHAB_SESSION_SIZE,
+        "sessions": sessions,
+    }
+
+
+def rehab_closing(rehab: dict, current_tier: str) -> str:
+    """The court's outlook on the plan, in the plea closing's style."""
+    if rehab["removed_count"] == 0:
+        return (
+            "No rehabilitation required. The record is already as "
+            "clean as this court can ask."
+        )
+    projected_rank = TIER_RANKS.get(
+        _normalize_tier_name(rehab["projected_tier"]), -1
+    )
+    if projected_rank < tier_rank(current_tier):
+        return (
+            "The court finds the defendant rehabilitable: finish "
+            "the plan and the verdict improves."
+        )
+    return (
+        "The plan reclaims space but not standing: the verdict "
+        "would hold. Rehabilitation is its own reward."
+    )
+
+
+def render_rehabilitation(rehab: dict, current_tier: str) -> str:
+    """The terminal REHABILITATION PLAN section printed by --rehab."""
+    out = [
+        "THE REHABILITATION PLAN",
+        "  The court assigns the following plan, in order. Each step "
+        "claims only",
+        "  files no earlier step claimed, and nothing is deleted, "
+        "moved, or",
+        "  modified by this court; the plan is yours to serve.",
+    ]
+    active = [step for step in rehab["steps"] if step["count"]]
+    if not active:
+        out.append("  No steps assigned: there is nothing to clear.")
+    for index, step in enumerate(active, start=1):
+        out += [
+            f"  Step {index} - {step['name']}: {step['count']:,} "
+            f"files, {step['human']} ({step['bytes']:,} bytes)",
+            f"    {step['detail']}",
+            f"    After this step: {step['remaining_count']:,} "
+            f"screenshots remain (projected verdict: "
+            f"{step['projected_tier']})",
+        ]
+    out += [
+        f"  {'Files assigned':<30} {rehab['removed_count']:,}",
+        f"  {'Space reclaimed':<30} {rehab['removed_human']} "
+        f"({rehab['removed_bytes']:,} bytes, "
+        f"{rehab['reclaim_share_pct']:.1f}% of the evidence)",
+        f"  {'Remaining evidence':<30} "
+        f"{rehab['remaining_count']:,} screenshots",
+        f"  {'Projected verdict':<30} {rehab['projected_tier']}",
+        f"  {'Estimated review time':<30} {rehab['review_minutes']:,} "
+        f"minute{'s' if rehab['review_minutes'] != 1 else ''} at "
+        f"{rehab['review_seconds_per_file']} seconds per file",
+        f"  {'Sessions to serve':<30} {rehab['sessions']:,} "
+        f"(at most {rehab['session_size']} files per session)",
+        "",
+        f"  {rehab_closing(rehab, current_tier)}",
+        "",
+    ]
+    return "\n".join(out)
+
+
+def rehab_json(rehab: dict, current_tier: str) -> dict:
+    """The rehabilitation plan as it appears in --json."""
+    return {
+        "years": rehab["years"],
+        "steps": [
+            {
+                "key": step["key"],
+                "name": step["name"],
+                "count": step["count"],
+                "bytes": step["bytes"],
+                "human": step["human"],
+                "cumulative_count": step["cumulative_count"],
+                "cumulative_bytes": step["cumulative_bytes"],
+                "remaining_count": step["remaining_count"],
+                "projected_tier": step["projected_tier"],
+            }
+            for step in rehab["steps"]
+        ],
+        "removed_count": rehab["removed_count"],
+        "removed_bytes": rehab["removed_bytes"],
+        "removed_human": rehab["removed_human"],
+        "reclaim_share_pct": rehab["reclaim_share_pct"],
+        "remaining_count": rehab["remaining_count"],
+        "projected_tier": rehab["projected_tier"],
+        "review_minutes": rehab["review_minutes"],
+        "sessions": rehab["sessions"],
+        "outlook": rehab_closing(rehab, current_tier),
+    }
+
+
+def render_rehabilitation_markdown(rehab: dict,
+                                   current_tier: str) -> list[str]:
+    """The '## Rehabilitation Plan' section lines for --out."""
+    out = ["## Rehabilitation Plan", ""]
+    out.append(
+        "The court assigns the following plan, in order. Each step "
+        "claims only files no earlier step claimed, and nothing is "
+        "deleted, moved, or modified by this court; the plan is "
+        "yours to serve."
+    )
+    out.append("")
+    active = [step for step in rehab["steps"] if step["count"]]
+    if not active:
+        out.append("No steps assigned: there is nothing to clear.")
+    for index, step in enumerate(active, start=1):
+        out.append(
+            f"- **Step {index} - {step['name']}:** "
+            f"{step['count']:,} files, {step['human']} "
+            f"({step['bytes']:,} bytes). {step['detail']} After this "
+            f"step: {step['remaining_count']:,} screenshots remain "
+            f"(projected verdict: **{step['projected_tier']}**)."
+        )
+    out += [
+        "",
+        f"Serving the whole plan would assign "
+        f"{rehab['removed_count']:,} files and reclaim "
+        f"{rehab['removed_human']} ({rehab['removed_bytes']:,} bytes, "
+        f"{rehab['reclaim_share_pct']:.1f}% of the evidence), leaving "
+        f"{rehab['remaining_count']:,} screenshots and a projected "
+        f"verdict of **{rehab['projected_tier']}**. Estimated review "
+        f"time: {rehab['review_minutes']:,} "
+        f"minute{'s' if rehab['review_minutes'] != 1 else ''} at "
+        f"{rehab['review_seconds_per_file']} seconds per file, in "
+        f"{rehab['sessions']:,} "
+        f"session{'s' if rehab['sessions'] != 1 else ''} of at most "
+        f"{rehab['session_size']} files.",
+        "",
+        rehab_closing(rehab, current_tier),
+        "",
+    ]
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -2707,7 +2968,8 @@ def render_markdown(stats: dict, tier: str, sentence: str, awards: list[dict],
                     rematch: dict | None = None,
                     rematch_requested: bool = False,
                     commentary: str | None = None,
-                    trend: dict | None = None) -> str:
+                    trend: dict | None = None,
+                    rehab: dict | None = None) -> str:
     out = [
         "# Snap Judgment",
         "",
@@ -2853,6 +3115,8 @@ def render_markdown(stats: dict, tier: str, sentence: str, awards: list[dict],
         else:
             out.append(rematch_line(rematch, tier))
         out.append("")
+    if rehab is not None:
+        out += [""] + render_rehabilitation_markdown(rehab, tier)
     if trend is not None:
         out += [""] + render_trend_markdown(trend, "screenshots")
     return "\n".join(out)
@@ -4368,6 +4632,15 @@ def build_parser() -> argparse.ArgumentParser:
                              "and court instead of the full report: "
                              "hearing count, count and verdict "
                              "trajectory, and a sparkline of the counts")
+    parser.add_argument("--rehab", action="store_true",
+                        help="also assign a rehabilitation plan: a "
+                             "staged cleanup plan (duplicate extras, "
+                             "then ancient evidence, then the largest "
+                             "remaining screenshots) with the space "
+                             "each step reclaims, the projected verdict "
+                             "after each step, a review-time estimate, "
+                             "and a session schedule (nothing is "
+                             "actually deleted)")
     parser.add_argument("--badge", metavar="FILE",
                         help="write a shields-style verdict badge (SVG) "
                              "to FILE")
@@ -4412,6 +4685,7 @@ def _run_downloads_court(args) -> int:
     unsupported = [
         ("--vs-year", args.vs_year is not None),
         ("--plea-bargain", bool(args.plea_bargain)),
+        ("--rehab", bool(args.rehab)),
         ("--judge-file", args.judge_file is not None),
     ]
     for flag, present in unsupported:
@@ -5583,6 +5857,7 @@ def main(argv=None) -> int:
             ("--badge", args.badge is not None),
             ("--html", args.html is not None),
             ("--trend", bool(args.trend)),
+            ("--rehab", bool(args.rehab)),
         ]
         for flag, present in refused:
             if present:
@@ -5608,6 +5883,29 @@ def main(argv=None) -> int:
     explicit = explicitly_set(sys.argv[1:] if argv is None else argv)
     apply_config(args, explicit)
 
+    if args.rehab:
+        # A rehabilitation plan is one folder set's own staged
+        # sentence; proceedings that compare, project, or combine
+        # do not combine with it.
+        refused = [
+            ("--vs", args.vs is not None),
+            ("--vs-year", args.vs_year is not None),
+            ("--rematch", bool(args.rematch)),
+            ("--grand-jury", bool(args.grand_jury)),
+            ("--plea-bargain", bool(args.plea_bargain)),
+            ("--cleanup-list", args.cleanup_list is not None),
+            ("--wrapped-kit", args.wrapped_kit is not None),
+            ("--trend", bool(args.trend)),
+        ]
+        for flag, present in refused:
+            if present:
+                print(
+                    f"snapjudgment: {flag} is not supported "
+                    f"with --rehab",
+                    file=sys.stderr,
+                )
+                return 2
+
     if args.trend:
         # A trend is a report about one folder set's own history in
         # one court; proceedings that compare, project, or combine
@@ -5619,6 +5917,7 @@ def main(argv=None) -> int:
             ("--grand-jury", bool(args.grand_jury)),
             ("--plea-bargain", bool(args.plea_bargain)),
             ("--wrapped-kit", args.wrapped_kit is not None),
+            ("--rehab", bool(args.rehab)),
         ]
         for flag, present in refused:
             if present:
@@ -5866,6 +6165,10 @@ def main(argv=None) -> int:
         if args.plea_bargain:
             plea = compute_plea_bargain(shots, args.plea_years, voice=voice)
 
+        rehab = None
+        if args.rehab:
+            rehab = compute_rehabilitation(shots, voice=voice)
+
         cleanup = None
         if args.cleanup_list is not None:
             # The cleanup order IS the plea bargain, computed silently
@@ -5975,7 +6278,8 @@ def main(argv=None) -> int:
                                 folders=folder_stats, vs_year=vs_year,
                                 plea=plea, rematch=rematch,
                                 rematch_requested=args.rematch,
-                                commentary=commentary, trend=trend),
+                                commentary=commentary, trend=trend,
+                                rehab=rehab),
                 encoding="utf-8"
             )
         if args.html:
@@ -6074,6 +6378,8 @@ def main(argv=None) -> int:
                 )
             if trend is not None:
                 data["trend"] = trend_json(trend)
+            if rehab is not None:
+                data["rehabilitation"] = rehab_json(rehab, tier)
             print(json.dumps(data, indent=2))
         else:
             if args.trend and trend is not None:
@@ -6102,6 +6408,8 @@ def main(argv=None) -> int:
                     print(render_year_comparison(vs_year))
                 if plea is not None:
                     print(render_plea_bargain(plea, tier))
+                if rehab is not None:
+                    print(render_rehabilitation(rehab, tier))
                 if cleanup is not None:
                     print(
                         f"  CLEANUP ORDER: {cleanup['count']} files "

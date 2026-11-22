@@ -4,6 +4,43 @@ All notable changes to Snap Judgment are recorded here. Versions are the
 tool's own; the record is the record. Every version below shipped on
 November 19, 2026 - it was that kind of day in court.
 
+## 0.13.0 - 2026-11-22
+
+- The rehabilitation plan: `--rehab` turns the sentence into a
+  staged cleanup plan, served in order. The screenshots are
+  partitioned into three steps and every screenshot is claimed by
+  at most one step: duplicate extras first (every suspect beyond
+  one keeper per exact size-and-dimensions group), then ancient
+  evidence (screenshots older than two years, measured from the
+  newest screenshot, that step 1 did not already claim - the plea
+  bargain counts an old duplicate as old; the plan never assigns
+  the same file twice), then the heavy evidence (the ten largest
+  screenshots still standing, assigned only when more than ten
+  would remain). Each step reports its files and bytes and the
+  cumulative position after serving it: the remaining count and
+  the projected verdict at that point, so the plan shows the
+  verdict improving stage by stage, not just at the end. The plan
+  closes with the totals: files assigned, space reclaimed and its
+  share of the evidence, the projected verdict, an estimated
+  review time (five seconds per file, rounded up to minutes), a
+  session schedule (at most fifty files per session), and the
+  court's outlook: no rehabilitation required when nothing is
+  assigned, rehabilitable when finishing the plan improves the
+  verdict, and space-but-not-standing when it would not. A plan
+  with nothing to clear assigns no steps. `--json` adds a
+  `rehabilitation` object with the steps, totals, and outlook,
+  the Markdown report gains a `## Rehabilitation Plan` section,
+  and the plan composes with `--judge` and `--intensity` as
+  usual. It refuses `--vs`, `--vs-year`, `--rematch`,
+  `--plea-bargain`, `--cleanup-list`, `--wrapped-kit`, `--trend`,
+  and `--grand-jury` with a plain error: those are different
+  proceedings, and the plea bargain in particular is the same
+  evidence tried as a single hypothetical rather than a served
+  plan. The downloads docket refuses `--rehab` with the same
+  plain error; the plan is a screenshots-court sentence. Nothing
+  is deleted, moved, or modified: the court assigns the plan,
+  the defendant serves it.
+
 ## 0.12.0 - 2026-11-20
 
 - The trend: `--trend` records the current hearing first, then

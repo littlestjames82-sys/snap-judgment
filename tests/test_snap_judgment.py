@@ -5293,6 +5293,337 @@ class DownloadsVersusTests(TempDirCase):
 
 
 # ---------------------------------------------------------------------------
+# the rehabilitation plan (v0.13.0): the sentence, served in stages
+# ---------------------------------------------------------------------------
+
+class RehabTests(TempDirCase):
+    def run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = sj.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def seed_rehab_folder(self):
+        """6 screenshots: 1 newest, a duplicate trio, 2 old (2023)."""
+        png = make_png(100, 100)
+        write_file(self.root, "screenshot_new.png", make_png(200, 200),
+                   datetime(2026, 6, 1, 12, 0))
+        for i in range(3):
+            write_file(self.root, f"screenshot_dup{i}.png", png,
+                       datetime(2026, 5, 1, 12, 0) + timedelta(days=i))
+        write_file(self.root, "screenshot_old1.png",
+                   make_png(50, 50, pad=10), datetime(2023, 1, 1, 12, 0))
+        write_file(self.root, "screenshot_old2.png",
+                   make_png(60, 60, pad=20), datetime(2023, 6, 1, 12, 0))
+        return png
+
+    def seed_heavy_folder(self, n=60):
+        """n recent screenshots, distinct dims and growing sizes."""
+        for i in range(n):
+            write_file(self.root, f"screenshot_{i:03d}.png",
+                       make_png(100 + i, 100, pad=i * 100),
+                       datetime(2026, 5, 1, 12, 0) + timedelta(days=i % 28))
+
+    # -- unit level ------------------------------------------------------
+
+    def test_exact_numbers(self):
+        png = self.seed_rehab_folder()
+        shots, _recordings = sj.collect([self.root])
+        rehab = sj.compute_rehabilitation(shots)
+        self.assertEqual(
+            [step["key"] for step in rehab["steps"]],
+            ["duplicate_extras", "ancient_evidence", "heavy_evidence"],
+        )
+        self.assertEqual(
+            [step["count"] for step in rehab["steps"]], [2, 2, 0]
+        )
+        self.assertEqual(rehab["removed_count"], 4)
+        self.assertEqual(rehab["remaining_count"], 2)
+        expected_bytes = (
+            2 * len(png)
+            + len(make_png(50, 50, pad=10))
+            + len(make_png(60, 60, pad=20))
+        )
+        self.assertEqual(rehab["removed_bytes"], expected_bytes)
+        self.assertEqual(rehab["steps"][0]["cumulative_count"], 2)
+        self.assertEqual(rehab["steps"][1]["cumulative_count"], 4)
+        self.assertEqual(rehab["steps"][1]["remaining_count"], 2)
+        self.assertEqual(
+            rehab["steps"][1]["projected_tier"], "Innocent Bystander"
+        )
+        self.assertEqual(rehab["projected_tier"], "Innocent Bystander")
+        self.assertEqual(rehab["cutoff"], datetime(2024, 6, 1).date())
+        self.assertEqual(rehab["years"], 2)
+        total = sum(s.size for s in shots)
+        self.assertEqual(
+            rehab["reclaim_share_pct"],
+            round(100.0 * expected_bytes / total, 1),
+        )
+        # 4 files at 5 seconds each rounds up to a single minute,
+        # and fits in a single session of 50
+        self.assertEqual(rehab["review_minutes"], 1)
+        self.assertEqual(rehab["sessions"], 1)
+
+    def test_partition_never_double_counts(self):
+        # 30 old screenshots forming one duplicate group, plus 5
+        # recent distinct ones: step 1 claims 29 of the old group,
+        # step 2 claims only its keeper. The plea bargain reaches
+        # the same total by the opposite attribution.
+        png = make_png(100, 100)
+        for i in range(30):
+            write_file(self.root, f"screenshot_old{i}.png", png,
+                       datetime(2023, 1, 1, 12, 0) + timedelta(days=i))
+        for i in range(5):
+            write_file(self.root, f"screenshot_new{i}.png",
+                       make_png(200 + i, 100),
+                       datetime(2026, 5, 1, 12, 0) + timedelta(days=i))
+        shots, _recordings = sj.collect([self.root])
+        rehab = sj.compute_rehabilitation(shots)
+        self.assertEqual(
+            [step["count"] for step in rehab["steps"]], [29, 1, 0]
+        )
+        self.assertEqual(
+            sum(step["count"] for step in rehab["steps"]),
+            rehab["removed_count"],
+        )
+        self.assertEqual(
+            sum(step["bytes"] for step in rehab["steps"]),
+            rehab["removed_bytes"],
+        )
+        plea = sj.compute_plea_bargain(shots, 2)
+        self.assertEqual(rehab["removed_count"], plea["removed_count"])
+        self.assertEqual(rehab["removed_bytes"], plea["removed_bytes"])
+
+    def test_heavy_step_takes_ten_largest_remaining(self):
+        self.seed_heavy_folder(60)
+        shots, _recordings = sj.collect([self.root])
+        rehab = sj.compute_rehabilitation(shots)
+        self.assertEqual(
+            [step["count"] for step in rehab["steps"]], [0, 0, 10]
+        )
+        heavy = rehab["steps"][2]
+        expected = sum(
+            len(make_png(100 + i, 100, pad=i * 100))
+            for i in range(50, 60)
+        )
+        self.assertEqual(heavy["bytes"], expected)
+        self.assertEqual(rehab["remaining_count"], 50)
+        self.assertEqual(rehab["projected_tier"], "Petty Offender")
+        # cumulative projected tiers never get worse down the plan
+        ranks = [
+            sj.tier_rank(step["projected_tier"])
+            for step in rehab["steps"]
+        ]
+        self.assertEqual(ranks, sorted(ranks, reverse=True))
+
+    def test_heavy_step_needs_more_than_ten_standing(self):
+        self.seed_heavy_folder(10)
+        shots, _recordings = sj.collect([self.root])
+        rehab = sj.compute_rehabilitation(shots)
+        self.assertEqual(rehab["steps"][2]["count"], 0)
+        self.assertEqual(rehab["removed_count"], 0)
+
+    def test_sessions_and_review_time_scale(self):
+        for i in range(120):
+            write_file(self.root, f"screenshot_old{i}.png",
+                       make_png(100 + i, 100),
+                       datetime(2023, 1, 1, 12, 0) + timedelta(days=i))
+        write_file(self.root, "screenshot_new.png", make_png(900, 900),
+                   datetime(2026, 6, 1, 12, 0))
+        shots, _recordings = sj.collect([self.root])
+        rehab = sj.compute_rehabilitation(shots)
+        self.assertEqual(rehab["removed_count"], 120)
+        self.assertEqual(rehab["sessions"], 3)  # ceil(120 / 50)
+        self.assertEqual(rehab["review_minutes"], 10)  # 120 * 5s = 600s
+
+    def test_single_screenshot_needs_no_plan(self):
+        write_file(self.root, "screenshot_one.png", make_png(100, 100),
+                   datetime(2026, 6, 1, 12, 0))
+        shots, _recordings = sj.collect([self.root])
+        rehab = sj.compute_rehabilitation(shots)
+        self.assertEqual(rehab["removed_count"], 0)
+        self.assertEqual(rehab["removed_bytes"], 0)
+        self.assertEqual(rehab["remaining_count"], 1)
+        self.assertEqual(rehab["projected_tier"], "Innocent Bystander")
+        self.assertEqual(rehab["review_minutes"], 0)
+        self.assertEqual(rehab["sessions"], 0)
+        self.assertIn(
+            "No rehabilitation required",
+            sj.rehab_closing(rehab, "Innocent Bystander"),
+        )
+
+    def test_voice_never_changes_the_math(self):
+        self.seed_rehab_folder()
+        shots, _recordings = sj.collect([self.root])
+        fair = sj.compute_rehabilitation(shots, voice="fair")
+        strict = sj.compute_rehabilitation(shots, voice="strict")
+        self.assertEqual(fair["removed_count"], strict["removed_count"])
+        self.assertEqual(fair["removed_bytes"], strict["removed_bytes"])
+        self.assertEqual(
+            fair["projected_tier"], strict["projected_tier"]
+        )
+
+    # -- screenshots court -------------------------------------------------
+
+    def test_section_absent_without_flag(self):
+        self.seed_rehab_folder()
+        code, out, _ = self.run_main([str(self.root)])
+        self.assertEqual(code, 0)
+        self.assertNotIn("REHABILITATION PLAN", out)
+        code, out, _ = self.run_main([str(self.root), "--json"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("rehabilitation", json.loads(out))
+
+    def test_section_present(self):
+        self.seed_rehab_folder()
+        code, out, _ = self.run_main([str(self.root), "--rehab"])
+        self.assertEqual(code, 0)
+        self.assertIn("THE REHABILITATION PLAN", out)
+        self.assertIn("Step 1 - Clear the duplicate extras: 2 files", out)
+        self.assertIn("Step 2 - Retire the ancient evidence: 2 files", out)
+        self.assertNotIn("Step 3", out)  # an empty step is not assigned
+        self.assertIn("After this step: 2 screenshots remain", out)
+        self.assertIn("Estimated review time", out)
+        self.assertIn(
+            "The plan reclaims space but not standing", out
+        )
+
+    def test_rehabilitable_line_when_tier_improves(self):
+        for i in range(55):
+            write_file(self.root, f"screenshot_old{i}.png",
+                       make_png(100 + i, 100),
+                       datetime(2023, 1, 1, 12, 0) + timedelta(days=i))
+        for i in range(5):
+            write_file(self.root, f"screenshot_new{i}.png",
+                       make_png(500 + i, 100),
+                       datetime(2026, 6, 1, 12, 0) + timedelta(days=i))
+        code, out, _ = self.run_main([str(self.root), "--rehab"])
+        self.assertEqual(code, 0)
+        self.assertIn("Petty Offender", out)  # the verdict itself stands
+        self.assertIn(
+            "The court finds the defendant rehabilitable", out
+        )
+
+    def test_single_screenshot_terminal(self):
+        write_file(self.root, "screenshot_one.png", make_png(100, 100),
+                   datetime(2026, 6, 1, 12, 0))
+        code, out, _ = self.run_main([str(self.root), "--rehab"])
+        self.assertEqual(code, 0)
+        self.assertIn("No steps assigned", out)
+        self.assertIn("No rehabilitation required", out)
+
+    def test_empty_folder(self):
+        empty = self.root / "empty"
+        empty.mkdir()
+        code, out, _ = self.run_main([str(empty), "--rehab"])
+        self.assertEqual(code, 2)
+        self.assertIn("No Evidence", out)
+        code, out, _ = self.run_main([str(empty), "--rehab", "--json"])
+        self.assertEqual(code, 2)
+        data = json.loads(out)
+        self.assertEqual(data["verdict"], "No Evidence")
+        self.assertNotIn("rehabilitation", data)
+
+    def test_json_shape(self):
+        png = self.seed_rehab_folder()
+        code, out, _ = self.run_main(
+            [str(self.root), "--rehab", "--json"]
+        )
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual(data["verdict"], "Innocent Bystander")
+        rehab = data["rehabilitation"]
+        self.assertEqual(
+            set(rehab),
+            {"years", "steps", "removed_count", "removed_bytes",
+             "removed_human", "reclaim_share_pct", "remaining_count",
+             "projected_tier", "review_minutes", "sessions", "outlook"},
+        )
+        self.assertEqual(
+            set(rehab["steps"][0]),
+            {"key", "name", "count", "bytes", "human",
+             "cumulative_count", "cumulative_bytes", "remaining_count",
+             "projected_tier"},
+        )
+        self.assertEqual(
+            [step["count"] for step in rehab["steps"]], [2, 2, 0]
+        )
+        self.assertEqual(rehab["removed_count"], 4)
+        self.assertEqual(
+            rehab["removed_bytes"],
+            2 * len(png)
+            + len(make_png(50, 50, pad=10))
+            + len(make_png(60, 60, pad=20)),
+        )
+        self.assertEqual(rehab["remaining_count"], 2)
+        self.assertEqual(rehab["projected_tier"], "Innocent Bystander")
+        self.assertIn("reclaims space but not standing",
+                      rehab["outlook"])
+
+    def test_markdown_section(self):
+        self.seed_rehab_folder()
+        md_path = self.root / "report.md"
+        code, _, _ = self.run_main(
+            [str(self.root), "--rehab", "--out", str(md_path)]
+        )
+        self.assertEqual(code, 0)
+        md = md_path.read_text(encoding="utf-8")
+        self.assertIn("## Rehabilitation Plan", md)
+        self.assertIn("Step 1 - Clear the duplicate extras", md)
+        self.assertIn("Step 2 - Retire the ancient evidence", md)
+        self.assertIn("projected verdict of **Innocent Bystander**", md)
+
+    def test_rehab_composes_with_judge_and_intensity(self):
+        base = datetime(2026, 6, 1, 23, 30)  # every shot at night
+        for i in range(60):
+            write_file(self.root, f"screenshot_{i}.png",
+                       make_png(100 + i, 100, pad=i * 10),
+                       base + timedelta(days=i % 20))
+        code, out, _ = self.run_main(
+            [str(self.root), "--rehab", "--judge", "strict",
+             "--intensity", "roast"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("THE REHABILITATION PLAN", out)
+        self.assertIn("Step 1 - Move out the heavy evidence", out)
+        self.assertIn("COMMENTARY:", out)
+
+    def test_rehab_refusals(self):
+        self.seed_rehab_folder()
+        combos = [
+            ["--vs", str(self.root)],
+            ["--vs-year", "2025"],
+            ["--rematch"],
+            ["--plea-bargain"],
+            ["--cleanup-list", str(self.root / "cleanup.txt")],
+            ["--wrapped-kit", str(self.root / "kit")],
+            ["--trend"],
+            ["--grand-jury"],
+        ]
+        for extra in combos:
+            with self.subTest(extra=extra):
+                code, _, err = self.run_main(
+                    [str(self.root), "--rehab"] + extra
+                )
+                self.assertEqual(code, 2)
+                self.assertIn("not supported", err)
+                self.assertIn("--rehab", err)
+
+    # -- downloads court ---------------------------------------------------
+
+    def test_rehab_refused_in_downloads_court(self):
+        dl_dir = self.root / "downloads"
+        write_sized(dl_dir, "file_0.dat", 1000,
+                    datetime(2026, 6, 1, 12, 0))
+        code, _, err = self.run_main(
+            [str(dl_dir), "--court", "downloads", "--rehab"]
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("--rehab", err)
+        self.assertIn("downloads court", err)
+
+
+# ---------------------------------------------------------------------------
 # shell completions (v0.7.0)
 # ---------------------------------------------------------------------------
 
