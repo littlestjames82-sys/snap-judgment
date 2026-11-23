@@ -4,6 +4,7 @@
 [![CI](https://github.com/littlestjames82-sys/snap-judgment/actions/workflows/ci.yml/badge.svg)](https://github.com/littlestjames82-sys/snap-judgment/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/github/license/littlestjames82-sys/snap-judgment)](LICENSE)
+[![Downloads](https://static.pepy.tech/badge/snap-judgment)](https://pepy.tech/project/snap-judgment)
 
 **Your screenshots, reviewed.** Snap Judgment reads a folder of screenshots and issues a courtroom-style verdict on your screenshot habits: a tier, the evidence, awards, and a sentence.
 
@@ -630,6 +631,13 @@ Yes. Three judges ship built in (strict, fair, lenient), and
 can rename the court's awards and rewrite their evidence. The Poet,
 The Drill Sergeant, The Grandmother, and The Critic ship as examples
 in `judges/`.
+
+## Also from Ghost Developer Studio
+
+- **PIP**: reviews the developer from their own git history, with grades and a report card. `pip install on-a-pip`
+- **Dead Projects Society**: builds a graveyard for your abandoned git projects, tombstones and all. `pip install dead-projects-society`
+- **Ghost Hands**: governed browser automation for AI agents, with every action classified, policy checked, and trailed. `pip install ghost-hands`
+- **Agent Seatbelt**: guardrails for AI coding agents, gating tool calls before they run. `pip install ghost-seatbelt`
 
 ## License
 
