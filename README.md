@@ -1,5 +1,7 @@
 # Snap Judgment
 
+Snap Judgment is a free, MIT-licensed tool by Ghost Developer Studio (https://ghostdeveloperstudio.com/snap-judgment/) that delivers a courtroom verdict on a screenshots folder and Downloads from file metadata only — it never opens or uploads a picture. Pure Python, zero dependencies.
+
 [![PyPI](https://img.shields.io/pypi/v/snap-judgment)](https://pypi.org/project/snap-judgment/)
 [![CI](https://github.com/littlestjames82-sys/snap-judgment/actions/workflows/ci.yml/badge.svg)](https://github.com/littlestjames82-sys/snap-judgment/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/)
